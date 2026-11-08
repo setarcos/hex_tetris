@@ -1,0 +1,705 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""六边形网格俄罗斯方块 (Hex Tetris) —— 六边形棋盘 / 斜线消行
+
+网格结构:
+    - 格子是"平顶(flat-top)"六边形，按轴向坐标 (q, r) 排列，列是竖直直线。
+    - 整个棋盘本身也是一个六边形: |q| <= 7, |r| <= 11, |s| <= 11  (s = -q - r)。
+      六条边依次是 16, 8, 8, 16, 8, 8 格 —— 即 8x8x16x8x8x16，
+      左右两条竖边（q = ±7 两列）各 16 格。共 289 格。
+      最高的一列（q = 0）有 23 格，所以棋盘纵高 23 个行距、横宽 23 个半宽。
+    - 消行: 与底边平行的斜线, 且分左右两半 (左 8 列 / 右 8 列), 每行最多 8 格。
+          左半 (q = -7..0): r = 常数
+          右半 (q =  0..7): s = -q-r = 常数
+      只有长度正好 8 格的整行填满才消除; 靠近顶点、不足 8 格的斜线不消除。
+      消行后同一列中上方的方块整体下落 (下落格数 = 该列中被消去的格子数)。
+      竖直列不消。
+
+移动/下落:
+    - 重力: 同一列里行 +1，axial Δ(0, +1)，始终垂直、每次 1 格。
+    - 左右: 到相邻列必然是斜下 —— 左 = (-1, +1)，右 = (+1, 0)。
+
+窗口可自由缩放，棋盘会自动缩放以完整放进窗口。
+
+运行:  .venv/bin/python hex_tetris.py
+"""
+
+import json
+import math
+import os
+import random
+
+import pygame
+
+# ------------------------------------------------------------------ 棋盘拓扑
+# 棋盘六边形的三条"半轴"：|q|<=Q_MAX, |r|<=R_MAX, |s|<=S_MAX
+Q_MAX, R_MAX, S_MAX = 7, 11, 11
+BOARD_ROWS = 2 * R_MAX + 1          # 最高一列的格数 = 23
+BOARD_SPAN = 3 * Q_MAX + 2          # 棋盘宽/高都等于 BOARD_SPAN * S = 23*S
+
+FPS = 60
+
+# 最高分记录：Top 5，保存在脚本同目录，游戏结束可输入名字
+HIGHSCORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "highscores.json")
+HIGHSCORE_LIMIT = 5
+HIGHSCORE_NAME_LIMIT = 10
+DEFAULT_PLAYER_NAME = "无名玩家"
+
+# 十种独立方块（轴向坐标），每种 4 格。六边形网格上四格连通块共 10 种
+# （旋转去重、镜像另算，穷举见 find_pieces.py）：
+#   I 直线 / O 菱形 / N 折线 / Y 三臂（自身镜像）
+#   T、L 互为镜像；J、R 互为镜像；S、Z 互为镜像
+PIECES = {
+    "I": [(0, 0), (1, 0), (2, 0), (3, 0)],
+    "O": [(0, 0), (1, 0), (0, 1), (1, 1)],
+    "T": [(0, 0), (1, 0), (2, 0), (1, -1)],
+    "L": [(0, 0), (1, 0), (2, 0), (0, 1)],
+    "J": [(0, 0), (1, 0), (2, 0), (2, 1)],
+    "S": [(0, 0), (1, 0), (1, 1), (2, 1)],
+    "Z": [(0, 0), (0, 1), (1, 1), (1, 2)],
+    "R": [(0, 0), (0, 1), (0, 2), (1, 2)],
+    "N": [(0, 0), (0, 1), (1, 1), (2, 0)],
+    "Y": [(0, 1), (1, 1), (1, 2), (2, 0)],
+}
+COLORS = {
+    "I": (80, 220, 230),
+    "O": (240, 210, 70),
+    "T": (170, 90, 220),
+    "L": (240, 150, 60),
+    "J": (70, 120, 230),
+    "S": (90, 200, 90),
+    "Z": (230, 80, 80),
+    "R": (60, 190, 160),
+    "N": (235, 120, 200),
+    "Y": (170, 210, 80),
+}
+
+BG_COLOR = (10, 12, 17)
+PANEL_COLOR = (16, 20, 27)
+EMPTY_LINE = (46, 78, 66)
+BORDER_COLOR = (120, 230, 190)
+TEXT_DIM = (150, 175, 165)
+
+# 三个移动方向（轴向增量）。向下 = 同一列 +1 行，垂直下落 1 格。
+DOWN = (0, 1)
+LEFT = (-1, 1)      # 左下
+RIGHT = (1, 0)      # 右下
+# 旋转踢墙（轴向，均为刚性平移）
+KICKS = [(0, 0), (-1, 1), (1, 0), (0, 1), (0, -1), (-1, 0), (1, -1)]
+
+GRAVITY_BASE = 520
+GRAVITY_MIN = 90
+LOCK_DELAY = 420
+DAS = 170
+DAS_REPEAT = 55
+SOFT_DROP_MS = 55
+
+# 布局
+MARGIN = 24
+PANEL_W = 290
+GAP = 24
+S_MIN, HEX_MAX = 7.0, 24.0
+
+FONT_CANDIDATES = [
+    os.path.expanduser("~/.local/share/fonts/msyh.ttc"),
+    os.path.expanduser("~/.local/share/fonts/DroidSansFallback.ttf"),
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+]
+
+# ------------------------------------------------------------------ 棋盘数据
+BOARD_CELLS = [(q, r)
+               for q in range(-Q_MAX, Q_MAX + 1)
+               for r in range(-R_MAX, R_MAX + 1)
+               if abs(q + r) <= S_MAX]
+BOARD_SET = set(BOARD_CELLS)
+
+# 消行用的“行”: 与底边 (左下 / 右下斜边) 平行, 各取半边, 每行最多 8 格。
+#   左 8 列 (q = -7..0): r = 常数 的斜线
+#   右 8 列 (q =  0..7): s = -q-r = 常数 的斜线
+# 竖直列不参与消行。
+LEFT_ROWS = [[(q, r) for q in range(-Q_MAX, 1) if (q, r) in BOARD_SET]
+             for r in range(-R_MAX, R_MAX + 1)]
+RIGHT_ROWS = [[(q, -s - q) for q in range(0, Q_MAX + 1) if (q, -s - q) in BOARD_SET]
+              for s in range(-S_MAX, S_MAX + 1)]
+_seen_rows, ROWS = set(), []
+for _row in LEFT_ROWS + RIGHT_ROWS:
+    _key = frozenset(_row)
+    if _row and _key not in _seen_rows:
+        _seen_rows.add(_key)
+        ROWS.append(_row)
+
+
+# --------------------------------------------------------------- 自适应几何
+def configure(win_w, win_h):
+    """根据窗口大小算出格距/原点/面板位置，保证整个六边形棋盘放进窗口。"""
+    global WIN_W, WIN_H, S, HEX_W, HEX_H, ORIGIN_X, ORIGIN_Y, PANEL_RECT
+    WIN_W = max(520, int(win_w))
+    WIN_H = max(360, int(win_h))
+    s_by_height = (WIN_H - 2 * MARGIN) / (BOARD_ROWS * math.sqrt(3))
+    s_by_width = (WIN_W - 2 * MARGIN - GAP - PANEL_W) / BOARD_SPAN
+    S = max(S_MIN, min(HEX_MAX, s_by_height, s_by_width))
+    HEX_W = 1.5 * S
+    HEX_H = math.sqrt(3) * S
+    ORIGIN_X = MARGIN + BOARD_SPAN * S / 2
+    ORIGIN_Y = WIN_H / 2
+    PANEL_RECT = pygame.Rect(WIN_W - MARGIN - PANEL_W, MARGIN, PANEL_W, WIN_H - 2 * MARGIN)
+
+
+# 默认布局（导入即可用；main() 会按屏幕大小覆盖）
+configure(900, 880)
+
+
+# ------------------------------------------------------------------ 坐标工具
+def rot_cw(cells):
+    """轴向坐标绕原点顺时针旋转 60°。"""
+    return [(-r, q + r) for q, r in cells]
+
+
+def piece_rel(name, rot):
+    cells = PIECES[name]
+    for _ in range(rot % 6):
+        cells = rot_cw(cells)
+    return cells
+
+
+def cell_center(q, r):
+    return (ORIGIN_X + HEX_W * q,
+            ORIGIN_Y + HEX_H * (r + q / 2.0))
+
+
+def hex_points(cx, cy, s):
+    """平顶六边形的 6 个顶点。"""
+    return [(cx + s * math.cos(math.radians(60 * i)),
+             cy + s * math.sin(math.radians(60 * i))) for i in range(6)]
+
+
+def clamp(color):
+    return tuple(max(0, min(255, int(v))) for v in color)
+
+
+def lighten(color, f):
+    return clamp((color[0] * f, color[1] * f, color[2] * f))
+
+
+def darken(color, f):
+    return lighten(color, f)
+
+
+def draw_hex(surf, cx, cy, s, fill=None, outline=None, width=2):
+    pts = hex_points(cx, cy, s)
+    if fill:
+        pygame.draw.polygon(surf, fill, pts)
+    if outline:
+        pygame.draw.polygon(surf, outline, pts, width)
+
+
+def draw_cell(surf, cx, cy, s, color):
+    pygame.draw.polygon(surf, color, hex_points(cx, cy, s))
+    pygame.draw.polygon(surf, lighten(color, 1.35), hex_points(cx, cy, s * 0.58))
+    pygame.draw.polygon(surf, darken(color, 0.45), hex_points(cx, cy, s), 2)
+
+
+def clear_full_lines(filled):
+    """原地消除所有被填满的整行（8 格）, 上方方块整体下落, 返回消除的行数。
+
+    靠近棋盘顶端顶点、不足 8 格的斜线不参与消除。
+    """
+    full = [row for row in ROWS if len(row) == 8 and all(c in filled for c in row)]
+    if not full:
+        return 0
+
+    removed = set()
+    for row in full:
+        removed.update(row)
+
+    removed_by_col = {}
+    for q, r in removed:
+        removed_by_col.setdefault(q, []).append(r)
+    for c in removed:
+        filled.pop(c, None)
+
+    # 同一列中位于被消格子上方的方块, 下落格数 = 该列中被消去的格子数
+    settled = {}
+    for (q, r), color in filled.items():
+        down = sum(1 for rr in removed_by_col.get(q, ()) if rr > r)
+        settled[(q, r + down)] = color
+    filled.clear()
+    filled.update(settled)
+    return len(full)
+
+
+def load_highscores():
+    """读取 Top 5 记录；文件缺失/损坏时返回空列表。"""
+    try:
+        with open(HIGHSCORE_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if isinstance(raw, dict):
+        raw = raw.get("scores", [])
+    if not isinstance(raw, list):
+        return []
+
+    scores = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            score = int(item.get("score", 0))
+        except (TypeError, ValueError):
+            continue
+        if score <= 0:
+            continue
+        name = str(item.get("name") or "").strip()[:HIGHSCORE_NAME_LIMIT]
+        scores.append({"name": name or DEFAULT_PLAYER_NAME, "score": score})
+    scores.sort(key=lambda e: -e["score"])
+    return scores[:HIGHSCORE_LIMIT]
+
+
+def save_highscores(scores):
+    """原子写入记录；失败时静默忽略，不影响游戏。"""
+    tmp = HIGHSCORE_FILE + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"scores": scores}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, HIGHSCORE_FILE)
+    except OSError:
+        pass
+
+
+def fit_text(s, font, max_w):
+    """把文字截短到 max_w 像素内，超出部分用省略号。"""
+    if font.size(s)[0] <= max_w:
+        return s
+    while s and font.size(s + "…")[0] > max_w:
+        s = s[:-1]
+    return s + "…"
+
+
+def load_font(size):
+    for path in FONT_CANDIDATES:
+        if os.path.exists(path):
+            try:
+                return pygame.font.Font(path, size)
+            except pygame.error:
+                pass
+    return pygame.font.Font(None, size)
+
+
+# --------------------------------------------------------------------- 游戏
+class Game:
+    def __init__(self, screen):
+        self.screen = screen
+        self.f_title = load_font(34)
+        self.f_big = load_font(26)
+        self.f_mid = load_font(20)
+        self.f_small = load_font(16)
+        self.highscores = load_highscores()
+        self.name_entry = None
+        self.last_rank = None
+        self.reset()
+
+    # -- 状态 ---------------------------------------------------------------
+    def reset(self):
+        self.filled = {}
+        self.score = 0
+        self.lines = 0
+        self.level = 1
+        self.game_over = False
+        self.paused = False
+        self.name_entry = None
+        self.last_rank = None
+        self.bag = []
+        self.drop_timer = 0
+        self.lock_timer = 0
+        self.das_dir = 0
+        self.das_timer = 0
+        self.piece = self.spawn(self.draw_name())
+        self.next_name = self.draw_name()
+        if self.piece is None:
+            self.finish_game()
+
+    def draw_name(self):
+        if not self.bag:
+            self.bag = list(PIECES)
+            random.shuffle(self.bag)
+        return self.bag.pop()
+
+    def spawn(self, name):
+        """在棋盘顶部居中（q = 0）的固定位置生成方块。
+
+        先把方块放到能完整容纳它的最高一行；若该出生位置已被占用则返回 None,
+        由调用方判定游戏结束。
+        """
+        rel = PIECES[name]
+        for ar in range(-S_MAX - 4, R_MAX + 1):
+            cells = [(q, r + ar) for q, r in rel]
+            if all(c in BOARD_SET for c in cells):
+                break
+        else:
+            return None
+        if any(c in self.filled for c in cells):
+            return None
+        return {"name": name, "rot": 0, "q": 0, "r": ar}
+
+    def cells_at(self, piece, q, r):
+        return [(cq + q, cr + r) for cq, cr in piece_rel(piece["name"], piece["rot"])]
+
+    def cur_cells(self):
+        return self.cells_at(self.piece, self.piece["q"], self.piece["r"])
+
+    def fits(self, cells):
+        return all(c in BOARD_SET and c not in self.filled for c in cells)
+
+    # -- 操作 ---------------------------------------------------------------
+    def try_move(self, delta):
+        if self.piece is None:
+            return False
+        dq, dr = delta
+        if self.fits(self.cells_at(self.piece, self.piece["q"] + dq, self.piece["r"] + dr)):
+            self.piece["q"] += dq
+            self.piece["r"] += dr
+            self.lock_timer = 0
+            return True
+        return False
+
+    def try_rotate(self, direction):
+        if self.piece is None:
+            return False
+        p = self.piece
+        new_rot = (p["rot"] + (1 if direction > 0 else -1)) % 6
+        rel = piece_rel(p["name"], new_rot)
+        for dq, dr in KICKS:
+            cells = [(cq + p["q"] + dq, cr + p["r"] + dr) for cq, cr in rel]
+            if self.fits(cells):
+                p["rot"] = new_rot
+                p["q"] += dq
+                p["r"] += dr
+                self.lock_timer = 0
+                return True
+        return False
+
+    def can_fall(self):
+        dq, dr = DOWN
+        return self.fits(self.cells_at(self.piece, self.piece["q"] + dq, self.piece["r"] + dr))
+
+    def landing_anchor(self):
+        p = self.piece
+        q, r = p["q"], p["r"]
+        dq, dr = DOWN
+        while self.fits(self.cells_at(p, q + dq, r + dr)):
+            q += dq
+            r += dr
+        return q, r
+
+    def hard_drop(self):
+        if self.piece is None:
+            return
+        p = self.piece
+        q, r = self.landing_anchor()
+        self.score += max(0, r - p["r"]) * 2
+        p["q"], p["r"] = q, r
+        self.lock()
+
+    def gravity_ms(self):
+        return max(GRAVITY_MIN, GRAVITY_BASE - (self.level - 1) * 45)
+
+    def lock(self):
+        for c in self.cur_cells():
+            self.filled[c] = COLORS[self.piece["name"]]
+
+        n = clear_full_lines(self.filled)
+        if n:
+            score_table = {1: 100, 2: 400, 3: 900}
+            self.lines += n
+            self.score += score_table.get(n, n * n * 100) * self.level
+            self.level = 1 + self.lines // 10
+
+        self.piece = self.spawn(self.next_name)
+        self.next_name = self.draw_name()
+        self.drop_timer = 0
+        self.lock_timer = 0
+        if self.piece is None:
+            self.finish_game()
+
+    # -- 最高分 -------------------------------------------------------------
+    def best_score(self):
+        return self.highscores[0]["score"] if self.highscores else 0
+
+    def qualifies(self):
+        """当前得分能否进入 Top 5。"""
+        if self.score <= 0:
+            return False
+        if len(self.highscores) < HIGHSCORE_LIMIT:
+            return True
+        return self.score > self.highscores[-1]["score"]
+
+    def finish_game(self):
+        self.game_over = True
+        self.name_entry = "" if self.qualifies() else None
+
+    def submit_name(self):
+        name = self.name_entry.strip()[:HIGHSCORE_NAME_LIMIT] or DEFAULT_PLAYER_NAME
+        entry = {"name": name, "score": self.score}
+        scores = sorted(self.highscores + [entry], key=lambda e: -e["score"])
+        scores = scores[:HIGHSCORE_LIMIT]
+        self.last_rank = next((i + 1 for i, e in enumerate(scores) if e is entry), None)
+        if self.last_rank is not None:
+            self.highscores = scores
+            save_highscores(scores)
+        self.name_entry = None
+
+    # -- 主循环回调 ---------------------------------------------------------
+    def on_key(self, key, text=""):
+        if key == pygame.K_ESCAPE:
+            return False
+        if self.name_entry is not None:
+            if key == pygame.K_BACKSPACE:
+                self.name_entry = self.name_entry[:-1]
+            elif key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.submit_name()
+            elif text and text.isprintable() and len(self.name_entry) < HIGHSCORE_NAME_LIMIT:
+                self.name_entry += text
+            return True
+        if key == pygame.K_r:
+            self.reset()
+            return True
+        if self.game_over:
+            return True
+        if key == pygame.K_p:
+            self.paused = not self.paused
+            return True
+        if self.paused:
+            return True
+
+        if key in (pygame.K_LEFT, pygame.K_a):
+            self.try_move(LEFT)
+            self.das_dir, self.das_timer = -1, DAS
+        elif key in (pygame.K_RIGHT, pygame.K_d):
+            self.try_move(RIGHT)
+            self.das_dir, self.das_timer = 1, DAS
+        elif key in (pygame.K_UP, pygame.K_x, pygame.K_w):
+            self.try_rotate(1)
+        elif key == pygame.K_z:
+            self.try_rotate(-1)
+        elif key == pygame.K_SPACE:
+            self.hard_drop()
+        return True
+
+    def update(self, dt):
+        if self.game_over or self.paused:
+            return
+
+        if self.das_dir:
+            self.das_timer -= dt
+            if self.das_timer <= 0:
+                self.das_timer = DAS_REPEAT
+                self.try_move(LEFT if self.das_dir < 0 else RIGHT)
+
+        keys = pygame.key.get_pressed()
+        soft = keys[pygame.K_DOWN] or keys[pygame.K_s]
+        interval = SOFT_DROP_MS if soft else self.gravity_ms()
+
+        if self.can_fall():
+            self.drop_timer += dt
+            if self.drop_timer >= interval:
+                self.drop_timer = 0
+                self.try_move(DOWN)
+                if soft:
+                    self.score += 1
+        else:
+            self.lock_timer += dt
+            if self.lock_timer >= LOCK_DELAY:
+                self.lock()
+
+    # -- 绘制 ---------------------------------------------------------------
+    def text(self, s, font, color, pos, center=False, right=False):
+        img = font.render(s, True, color)
+        rect = img.get_rect()
+        if center:
+            rect.center = pos
+        elif right:
+            rect.topright = pos
+        else:
+            rect.topleft = pos
+        self.screen.blit(img, rect)
+
+    def draw_board(self):
+        r = max(2, int(S * 0.1))
+        for q, cell_r in BOARD_CELLS:
+            cx, cy = cell_center(q, cell_r)
+            color = self.filled.get((q, cell_r))
+            if color is None:
+                draw_hex(self.screen, cx, cy, S, None, EMPTY_LINE, r)
+            else:
+                draw_cell(self.screen, cx, cy, S, color)
+
+        if self.game_over:
+            return
+
+        color = COLORS[self.piece["name"]]
+        for c in self.cells_at(self.piece, *self.landing_anchor()):
+            if c in BOARD_SET and c not in self.filled:
+                draw_hex(self.screen, *cell_center(*c), S - 3, None, lighten(color, 1.05), 2)
+        for q, cell_r in self.cur_cells():
+            draw_cell(self.screen, *cell_center(q, cell_r), S, color)
+
+    def draw_preview(self, name, box, size):
+        pts = [(1.5 * size * q, math.sqrt(3) * size * (r + q / 2.0))
+               for q, r in PIECES[name]]
+        ox = box.centerx - (min(p[0] for p in pts) + max(p[0] for p in pts)) / 2
+        oy = box.centery - (min(p[1] for p in pts) + max(p[1] for p in pts)) / 2
+        for x, y in pts:
+            draw_cell(self.screen, ox + x, oy + y, size, COLORS[name])
+
+    def draw_panel(self):
+        r = PANEL_RECT
+        panel = pygame.Surface(r.size, pygame.SRCALPHA)
+        panel.fill((*PANEL_COLOR, 235))
+        pygame.draw.rect(panel, (*BORDER_COLOR, 90), panel.get_rect(), 2, border_radius=16)
+        self.screen.blit(panel, r.topleft)
+
+        self.text("HEX TETRIS", self.f_title, (240, 210, 70), (r.centerx, r.top + 34), center=True)
+        self.text("六边形棋盘 8·8·16·8·8·16 · 斜线消行", self.f_small, TEXT_DIM,
+                  (r.centerx, r.top + 62), center=True)
+
+        self.text("NEXT", self.f_mid, (80, 220, 230), (r.left + 26, r.top + 84))
+        box = pygame.Rect(r.left + 26, r.top + 106, r.width - 52, 120)
+        pygame.draw.rect(self.screen, (40, 70, 60), box, 2, border_radius=10)
+        self.draw_preview(self.next_name, box, max(7, int(S * 0.75)))
+
+        y = box.bottom + 22
+        for label, value in (("得分", self.score), ("最高分", self.best_score()),
+                             ("消行", self.lines), ("等级", self.level)):
+            self.text(label, self.f_mid, TEXT_DIM, (r.left + 26, y))
+            self.text(str(value), self.f_big, (235, 240, 238), (r.right - 26, y - 4), right=True)
+            y += 38
+
+        lines = [
+            "←/→  A/D   斜下移动",
+            "↑ / X      顺时针旋转",
+            "Z          逆时针旋转",
+            "↓ / S      加速下降",
+            "空格       硬降",
+            "Alt+Enter  全屏切换",
+            "P 暂停   R 重开   Esc 退出",
+        ]
+        help_top = r.bottom - 24 - 20 * len(lines)
+
+        # Top 5（窗口太矮时自动少显示几行）
+        y += 4
+        if y + 28 + 20 <= help_top:
+            self.text("TOP 5", self.f_mid, (80, 220, 230), (r.left + 26, y))
+            y += 28
+            if not self.highscores:
+                self.text("暂无记录", self.f_small, TEXT_DIM, (r.left + 26, y))
+            for i, entry in enumerate(self.highscores, 1):
+                if y + 20 > help_top:
+                    break
+                top = entry["score"] == self.best_score()
+                color = (240, 210, 70) if top else (235, 240, 238)
+                self.text(str(i), self.f_small, TEXT_DIM, (r.left + 26, y))
+                name = fit_text(entry["name"], self.f_small, r.width - 52 - 32 - 80)
+                self.text(name, self.f_small, color, (r.left + 52, y))
+                self.text(str(entry["score"]), self.f_small, color,
+                          (r.right - 26, y), right=True)
+                y += 22
+
+        y = help_top
+        for line in lines:
+            self.text(line, self.f_small, TEXT_DIM, (r.left + 26, y))
+            y += 20
+
+    def overlay(self, title, subtitle, color):
+        shade = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 175))
+        self.screen.blit(shade, (0, 0))
+        self.text(title, self.f_title, color, (WIN_W // 2, WIN_H // 2 - 18), center=True)
+        self.text(subtitle, self.f_mid, (235, 240, 238), (WIN_W // 2, WIN_H // 2 + 30), center=True)
+
+    def draw(self):
+        self.screen.fill(BG_COLOR)
+        self.draw_board()
+        self.draw_panel()
+        if self.paused and not self.game_over:
+            self.overlay("已暂停", "按 P 继续", (240, 210, 70))
+        if self.game_over:
+            self.overlay("游戏结束", "得分 %d" % self.score, (240, 210, 70))
+            cx, cy = WIN_W // 2, WIN_H // 2
+            if self.name_entry is not None:
+                self.text("新纪录！输入名字（最多 %d 字符）" % HIGHSCORE_NAME_LIMIT,
+                          self.f_mid, (80, 220, 230), (cx, cy + 80), center=True)
+                box = pygame.Rect(0, 0, 320, 48)
+                box.center = (cx, cy + 130)
+                pygame.draw.rect(self.screen, (40, 70, 60), box, 2, border_radius=8)
+                shown = self.name_entry + "_"
+                self.text(shown, self.f_big, (235, 240, 238), box.center, center=True)
+                self.text("Enter 确认 · Backspace 删除", self.f_small, TEXT_DIM,
+                          (cx, cy + 180), center=True)
+            else:
+                if self.last_rank:
+                    tip = "第 %d 名 · 最高分 %d" % (self.last_rank, self.best_score())
+                    color = (80, 220, 230)
+                else:
+                    tip = "最高分 %d" % self.best_score()
+                    color = (235, 240, 238)
+                self.text(tip, self.f_mid, color, (cx, cy + 80), center=True)
+                self.text("按 R 重开 · Esc 退出", self.f_mid, (235, 240, 238),
+                          (cx, cy + 126), center=True)
+
+
+def main():
+    pygame.init()
+    sizes = pygame.display.get_desktop_sizes() or [(1024, 768)]
+    max_w = max(w for w, _ in sizes)
+    max_h = max(h for _, h in sizes)
+    configure(min(920, max_w - 80), min(880, max_h - 120))
+    screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
+    pygame.display.set_caption("Hex Tetris - 六边形俄罗斯方块")
+    clock = pygame.time.Clock()
+    game = Game(screen)
+
+    running = True
+    fullscreen = False
+    windowed_size = (WIN_W, WIN_H)
+    while running:
+        dt = clock.tick(FPS)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.VIDEORESIZE:
+                if fullscreen:
+                    configure(event.w, event.h)
+                    screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.FULLSCREEN)
+                else:
+                    windowed_size = (event.w, event.h)
+                    configure(event.w, event.h)
+                    screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
+                game.screen = screen
+            elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and (event.mod & pygame.KMOD_ALT):
+                    fullscreen = not fullscreen
+                    if fullscreen:
+                        windowed_size = (WIN_W, WIN_H)
+                        w, h = pygame.display.get_desktop_sizes()[0]
+                        configure(w, h)
+                        screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.FULLSCREEN)
+                    else:
+                        configure(*windowed_size)
+                        screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
+                    game.screen = screen
+                elif game.on_key(event.key, event.unicode) is False:
+                    running = False
+            elif event.type == pygame.KEYUP:
+                if event.key in (pygame.K_LEFT, pygame.K_a) and game.das_dir < 0:
+                    game.das_dir = 0
+                elif event.key in (pygame.K_RIGHT, pygame.K_d) and game.das_dir > 0:
+                    game.das_dir = 0
+        game.update(dt)
+        game.draw()
+        pygame.display.flip()
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()

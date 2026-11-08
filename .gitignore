@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 运行时数据（最高分记录）
+highscores.json
+highscores.json.tmp
+
+# find_pieces.py 生成的图片
+pieces.png
