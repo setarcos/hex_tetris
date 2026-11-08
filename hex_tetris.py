@@ -155,8 +155,33 @@ def rot_cw(cells):
     return [(-r, q + r) for q, r in cells]
 
 
-def piece_rel(name, rot):
+def piece_pivot(name):
+    """方块的旋转枢轴: 离重心最近的自身格子。
+
+    六边形网格上只有格子中心是合法的 60° 旋转中心（绕顶点转会把格子
+    甩到半格位置），所以枢轴只能选格子。取离重心最近的一格，旋转时
+    方块就不会大幅甩出去。
+    """
     cells = PIECES[name]
+    cq = sum(q for q, _ in cells) / len(cells)
+    cr = sum(r for _, r in cells) / len(cells)
+
+    def key(c):
+        q, r = c
+        d = (q - cq) ** 2 + (r - cr) ** 2
+        far = max(abs(q - a) + abs(r - b) + abs((a + b) - (q + r)) for a, b in cells)
+        return (round(d, 9), far, c)
+
+    return min(cells, key=key)
+
+
+PIVOTS = {name: piece_pivot(name) for name in PIECES}
+
+
+def piece_rel(name, rot):
+    """方块各格相对枢轴的轴向坐标（已旋转 rot 个 60°）。"""
+    pq, pr = PIVOTS[name]
+    cells = [(q - pq, r - pr) for q, r in PIECES[name]]
     for _ in range(rot % 6):
         cells = rot_cw(cells)
     return cells
@@ -331,7 +356,7 @@ class Game:
         先把方块放到能完整容纳它的最高一行；若该出生位置已被占用则返回 None,
         由调用方判定游戏结束。
         """
-        rel = PIECES[name]
+        rel = piece_rel(name, 0)
         for ar in range(-S_MAX - 4, R_MAX + 1):
             cells = [(q, r + ar) for q, r in rel]
             if all(c in BOARD_SET for c in cells):

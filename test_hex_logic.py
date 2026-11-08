@@ -167,6 +167,28 @@ def test_spawn_fixed_and_death():
     pygame.quit()
 
 
+def test_rotation_pivots_near_centroid():
+    """旋转枢轴必须是离重心最近的自身格子, 且旋转时重心漂移不超过 1.5 个格距。"""
+    def centroid(cells):
+        xs = [px(*c)[0] for c in cells]
+        ys = [px(*c)[1] for c in cells]
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+
+    for name, cells in H.PIECES.items():
+        pivot = H.PIVOTS[name]
+        assert pivot in cells, name                       # 枢轴必须是自身格子
+        # 只允许格子中心做枢轴: 枢轴格在 6 个姿态里都停在相对原点
+        for rot in range(6):
+            assert (0, 0) in H.piece_rel(name, rot), (name, rot)
+        # 重心漂移: 不超过 1.5 个格距 (六边形网格格距 = √3 · S)
+        cell_dist = H.HEX_H
+        c0 = centroid(H.piece_rel(name, 0))
+        for rot in range(6):
+            cx, cy = centroid(H.piece_rel(name, rot))
+            drift = ((cx - c0[0]) ** 2 + (cy - c0[1]) ** 2) ** 0.5
+            assert drift <= 1.5 * cell_dist, (name, rot, drift / cell_dist)
+
+
 def test_pieces_cover_all_tetrahexes():
     """游戏中的方块正好是六边形网格上全部 10 种独立四格方块。"""
     import find_pieces as F
@@ -214,6 +236,7 @@ if __name__ == "__main__":
     test_fall_is_vertical_one_cell()
     test_lateral_is_diagonal_down()
     test_rotation_is_rigid()
+    test_rotation_pivots_near_centroid()
     test_rows_are_half_diagonals()
     test_left_row_clear_and_fall()
     test_right_row_clear_and_fall()
