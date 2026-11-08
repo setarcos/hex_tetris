@@ -101,7 +101,7 @@ SPAWN_PAUSE = 150
 MARGIN = 24
 PANEL_W = 290
 GAP = 24
-S_MIN, HEX_MAX = 7.0, 24.0
+S_MIN, HEX_MAX = 7.0, 40.0
 
 FONT_CANDIDATES = [
     os.path.expanduser("~/.local/share/fonts/msyh.ttc"),
@@ -143,9 +143,13 @@ def configure(win_w, win_h):
     S = max(S_MIN, min(HEX_MAX, s_by_height, s_by_width))
     HEX_W = 1.5 * S
     HEX_H = math.sqrt(3) * S
-    ORIGIN_X = MARGIN + BOARD_SPAN * S / 2
+    # 棋盘与记分牌始终靠在一起，作为一个整组在窗口里水平居中
+    group_w = BOARD_SPAN * S + GAP + PANEL_W
+    left = max(MARGIN, (WIN_W - group_w) / 2)
+    ORIGIN_X = left + BOARD_SPAN * S / 2
     ORIGIN_Y = WIN_H / 2
-    PANEL_RECT = pygame.Rect(WIN_W - MARGIN - PANEL_W, MARGIN, PANEL_W, WIN_H - 2 * MARGIN)
+    PANEL_RECT = pygame.Rect(int(left + BOARD_SPAN * S + GAP), MARGIN,
+                             PANEL_W, WIN_H - 2 * MARGIN)
 
 
 # 默认布局（导入即可用；main() 会按屏幕大小覆盖）
