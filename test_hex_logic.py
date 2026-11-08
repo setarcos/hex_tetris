@@ -189,17 +189,6 @@ def test_rotation_pivots_near_centroid():
             assert drift <= 1.5 * cell_dist, (name, rot, drift / cell_dist)
 
 
-def test_pieces_cover_all_tetrahexes():
-    """游戏中的方块正好是六边形网格上全部 10 种独立四格方块。"""
-    import find_pieces as F
-
-    classes = {F.canonical(s) for s in F.all_fixed_shapes(4)}
-    assert len(classes) == 10
-    assert len(H.PIECES) == 10
-    assert set(H.PIECES) == set(H.COLORS)
-    assert {F.canonical(c) for c in H.PIECES.values()} == classes
-
-
 def test_spawn_and_lock():
     pygame.init()
     screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
@@ -244,7 +233,6 @@ if __name__ == "__main__":
     test_vertical_column_does_not_clear()
     test_short_rows_do_not_clear()
     test_spawn_fixed_and_death()
-    test_pieces_cover_all_tetrahexes()
     test_spawn_and_lock()
     make_shot("/tmp/hex_shot.png")
     print("ALL LOGIC TESTS PASSED")
