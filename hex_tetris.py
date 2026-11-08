@@ -27,6 +27,7 @@
 """
 
 import json
+import locale
 import math
 import os
 import random
@@ -45,7 +46,84 @@ FPS = 60
 HIGHSCORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "highscores.json")
 HIGHSCORE_LIMIT = 5
 HIGHSCORE_NAME_LIMIT = 10
-DEFAULT_PLAYER_NAME = "无名玩家"
+
+# ------------------------------------------------------------------ 界面语言
+# 按系统 locale 选择中文/英文；可用环境变量 HEX_TETRIS_LANG=zh|en 覆盖。
+STRINGS = {
+    "zh": {
+        "caption": "Hex Tetris - 六边形俄罗斯方块",
+        "subtitle": "六边形棋盘 · 斜线消行",
+        "score": "得分",
+        "best": "最高分",
+        "lines": "消行",
+        "level": "等级",
+        "help": [
+            "←/→  A/D   斜下移动",
+            "↑ / X      顺时针旋转",
+            "Z          逆时针旋转",
+            "↓ / S      加速下降",
+            "空格       硬降",
+            "Alt+Enter  全屏切换",
+            "P 暂停   R 重开   Esc 退出",
+        ],
+        "no_records": "暂无记录",
+        "paused": "已暂停",
+        "resume": "按 P 继续",
+        "game_over": "游戏结束",
+        "score_line": "得分 %d",
+        "new_record": "新纪录！输入名字（最多 %d 字符）",
+        "name_keys": "Enter 确认 · Backspace 删除",
+        "rank": "第 %d 名 · 最高分 %d",
+        "best_only": "最高分 %d",
+        "restart": "按 R 重开 · Esc 退出",
+        "anon": "无名玩家",
+    },
+    "en": {
+        "caption": "Hex Tetris",
+        "subtitle": "Hex board · diagonal clears",
+        "score": "SCORE",
+        "best": "BEST",
+        "lines": "LINES",
+        "level": "LEVEL",
+        "help": [
+            "←/→  A/D   Move",
+            "↑ / X      Rotate CW",
+            "Z          Rotate CCW",
+            "↓ / S      Soft drop",
+            "Space      Hard drop",
+            "Alt+Enter  Fullscreen",
+            "P Pause  R Restart  Esc Quit",
+        ],
+        "no_records": "No records yet",
+        "paused": "PAUSED",
+        "resume": "Press P to resume",
+        "game_over": "GAME OVER",
+        "score_line": "Score %d",
+        "new_record": "New record! Enter your name (max %d chars)",
+        "name_keys": "Enter confirm · Backspace delete",
+        "rank": "Rank %d · Best %d",
+        "best_only": "Best %d",
+        "restart": "Press R to restart · Esc to quit",
+        "anon": "Anonymous",
+    },
+}
+
+
+def detect_lang():
+    """HEX_TETRIS_LANG / LC_ALL / LC_MESSAGES / LANG 依次生效，非 zh 视为英文。"""
+    for var in ("HEX_TETRIS_LANG", "LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var, "").lower()
+        if value.startswith(("zh", "en")):
+            return "zh" if value.startswith("zh") else "en"
+    try:
+        value = (locale.getlocale()[0] or "").lower()
+    except (TypeError, ValueError):
+        value = ""
+    return "zh" if value.startswith("zh") else "en"
+
+
+TEXT = STRINGS[detect_lang()]
+DEFAULT_PLAYER_NAME = TEXT["anon"]
 
 # 十种独立方块（轴向坐标），每种 4 格。六边形网格上四格连通块共 10 种
 # （旋转去重、镜像另算，穷举见 find_pieces.py）：
@@ -602,7 +680,7 @@ class Game:
         self.screen.blit(panel, r.topleft)
 
         self.text("HEX TETRIS", self.f_title, (240, 210, 70), (r.centerx, r.top + 34), center=True)
-        self.text("六边形棋盘 8·8·16·8·8·16 · 斜线消行", self.f_small, TEXT_DIM,
+        self.text(TEXT["subtitle"], self.f_small, TEXT_DIM,
                   (r.centerx, r.top + 62), center=True)
 
         self.text("NEXT", self.f_mid, (80, 220, 230), (r.left + 26, r.top + 84))
@@ -611,21 +689,13 @@ class Game:
         self.draw_preview(self.next_name, box, max(7, int(S * 0.75)))
 
         y = box.bottom + 22
-        for label, value in (("得分", self.score), ("最高分", self.best_score()),
-                             ("消行", self.lines), ("等级", self.level)):
+        for label, value in ((TEXT["score"], self.score), (TEXT["best"], self.best_score()),
+                             (TEXT["lines"], self.lines), (TEXT["level"], self.level)):
             self.text(label, self.f_mid, TEXT_DIM, (r.left + 26, y))
             self.text(str(value), self.f_big, (235, 240, 238), (r.right - 26, y - 4), right=True)
             y += 38
 
-        lines = [
-            "←/→  A/D   斜下移动",
-            "↑ / X      顺时针旋转",
-            "Z          逆时针旋转",
-            "↓ / S      加速下降",
-            "空格       硬降",
-            "Alt+Enter  全屏切换",
-            "P 暂停   R 重开   Esc 退出",
-        ]
+        lines = TEXT["help"]
         help_top = r.bottom - 24 - 20 * len(lines)
 
         # Top 5（窗口太矮时自动少显示几行）
@@ -634,7 +704,7 @@ class Game:
             self.text("TOP 5", self.f_mid, (80, 220, 230), (r.left + 26, y))
             y += 28
             if not self.highscores:
-                self.text("暂无记录", self.f_small, TEXT_DIM, (r.left + 26, y))
+                self.text(TEXT["no_records"], self.f_small, TEXT_DIM, (r.left + 26, y))
             for i, entry in enumerate(self.highscores, 1):
                 if y + 20 > help_top:
                     break
@@ -664,29 +734,29 @@ class Game:
         self.draw_board()
         self.draw_panel()
         if self.paused and not self.game_over:
-            self.overlay("已暂停", "按 P 继续", (240, 210, 70))
+            self.overlay(TEXT["paused"], TEXT["resume"], (240, 210, 70))
         if self.game_over:
-            self.overlay("游戏结束", "得分 %d" % self.score, (240, 210, 70))
+            self.overlay(TEXT["game_over"], TEXT["score_line"] % self.score, (240, 210, 70))
             cx, cy = WIN_W // 2, WIN_H // 2
             if self.name_entry is not None:
-                self.text("新纪录！输入名字（最多 %d 字符）" % HIGHSCORE_NAME_LIMIT,
+                self.text(TEXT["new_record"] % HIGHSCORE_NAME_LIMIT,
                           self.f_mid, (80, 220, 230), (cx, cy + 80), center=True)
                 box = pygame.Rect(0, 0, 320, 48)
                 box.center = (cx, cy + 130)
                 pygame.draw.rect(self.screen, (40, 70, 60), box, 2, border_radius=8)
                 shown = self.name_entry + "_"
                 self.text(shown, self.f_big, (235, 240, 238), box.center, center=True)
-                self.text("Enter 确认 · Backspace 删除", self.f_small, TEXT_DIM,
+                self.text(TEXT["name_keys"], self.f_small, TEXT_DIM,
                           (cx, cy + 180), center=True)
             else:
                 if self.last_rank:
-                    tip = "第 %d 名 · 最高分 %d" % (self.last_rank, self.best_score())
+                    tip = TEXT["rank"] % (self.last_rank, self.best_score())
                     color = (80, 220, 230)
                 else:
-                    tip = "最高分 %d" % self.best_score()
+                    tip = TEXT["best_only"] % self.best_score()
                     color = (235, 240, 238)
                 self.text(tip, self.f_mid, color, (cx, cy + 80), center=True)
-                self.text("按 R 重开 · Esc 退出", self.f_mid, (235, 240, 238),
+                self.text(TEXT["restart"], self.f_mid, (235, 240, 238),
                           (cx, cy + 126), center=True)
 
 
@@ -697,7 +767,7 @@ def main():
     max_h = max(h for _, h in sizes)
     configure(min(920, max_w - 80), min(880, max_h - 120))
     screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
-    pygame.display.set_caption("Hex Tetris - 六边形俄罗斯方块")
+    pygame.display.set_caption(TEXT["caption"])
     clock = pygame.time.Clock()
     game = Game(screen)
 
