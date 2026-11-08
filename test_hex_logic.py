@@ -189,6 +189,30 @@ def test_rotation_pivots_near_centroid():
             assert drift <= 1.5 * cell_dist, (name, rot, drift / cell_dist)
 
 
+def test_pause_after_lock():
+    """落定后短暂停顿: 新方块在 SPAWN_PAUSE 内不响应按键、不下落。"""
+    pygame.init()
+    screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
+    g = H.Game(screen)
+    g.hard_drop()
+    assert g.piece is not None
+    assert g.spawn_timer == H.SPAWN_PAUSE
+
+    anchor = (g.piece["q"], g.piece["r"], g.piece["rot"])
+    g.update(H.SPAWN_PAUSE - 1)
+    assert (g.piece["q"], g.piece["r"], g.piece["rot"]) == anchor
+    for key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_SPACE):
+        g.on_key(key)
+    assert (g.piece["q"], g.piece["r"], g.piece["rot"]) == anchor
+
+    # 停顿结束: 恢复下落
+    g.update(1)
+    assert g.spawn_timer == 0
+    g.update(g.gravity_ms())
+    assert (g.piece["q"], g.piece["r"]) != anchor[:2]
+    pygame.quit()
+
+
 def test_spawn_and_lock():
     pygame.init()
     screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
@@ -233,6 +257,7 @@ if __name__ == "__main__":
     test_vertical_column_does_not_clear()
     test_short_rows_do_not_clear()
     test_spawn_fixed_and_death()
+    test_pause_after_lock()
     test_spawn_and_lock()
     make_shot("/tmp/hex_shot.png")
     print("ALL LOGIC TESTS PASSED")

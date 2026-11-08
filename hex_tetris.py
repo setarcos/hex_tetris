@@ -87,12 +87,15 @@ RIGHT = (1, 0)      # 右下
 # 旋转踢墙（轴向，均为刚性平移）
 KICKS = [(0, 0), (-1, 1), (1, 0), (0, 1), (0, -1), (-1, 0), (1, -1)]
 
-GRAVITY_BASE = 520
-GRAVITY_MIN = 90
-LOCK_DELAY = 420
-DAS = 170
-DAS_REPEAT = 55
+GRAVITY_BASE = 1040
+GRAVITY_MIN = 180
+LOCK_DELAY = 840
+DAS = 340
+DAS_REPEAT = 110
 SOFT_DROP_MS = 55
+# 落定后的短暂停顿：新方块在这段时间内不响应按键、不下落，
+# 避免按住下键 / 连按空格时一下连掉两块。
+SPAWN_PAUSE = 150
 
 # 布局
 MARGIN = 24
@@ -337,6 +340,7 @@ class Game:
         self.bag = []
         self.drop_timer = 0
         self.lock_timer = 0
+        self.spawn_timer = 0
         self.das_dir = 0
         self.das_timer = 0
         self.piece = self.spawn(self.draw_name())
@@ -427,7 +431,7 @@ class Game:
         self.lock()
 
     def gravity_ms(self):
-        return max(GRAVITY_MIN, GRAVITY_BASE - (self.level - 1) * 45)
+        return max(GRAVITY_MIN, GRAVITY_BASE - (self.level - 1) * 90)
 
     def lock(self):
         for c in self.cur_cells():
@@ -444,6 +448,7 @@ class Game:
         self.next_name = self.draw_name()
         self.drop_timer = 0
         self.lock_timer = 0
+        self.spawn_timer = SPAWN_PAUSE
         if self.piece is None:
             self.finish_game()
 
@@ -496,6 +501,8 @@ class Game:
             return True
         if self.paused:
             return True
+        if self.spawn_timer > 0:
+            return True
 
         if key in (pygame.K_LEFT, pygame.K_a):
             self.try_move(LEFT)
@@ -513,6 +520,10 @@ class Game:
 
     def update(self, dt):
         if self.game_over or self.paused:
+            return
+
+        if self.spawn_timer > 0:
+            self.spawn_timer = max(0, self.spawn_timer - dt)
             return
 
         if self.das_dir:
