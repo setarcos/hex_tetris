@@ -1,7 +1,7 @@
 # Hex Tetris
 
 A hex-grid Tetris written in pure `pygame-ce`. The board itself is a hexagon, and only **diagonal lines** clear when filled.
-No image assets are used.
+All graphics are drawn procedurally; the game loads no image assets.
 
 [中文说明](README.zh-CN.md) · [License: GPL-3.0-or-later](#license)
 
@@ -13,16 +13,9 @@ No image assets are used.
   the two vertical sides `q = ±7` have **16 cells** each, the other four slanted sides have 8 each. **289 cells** in total.
 - The tallest column (`q = 0`) has 23 cells, so the board is 23 row-heights tall and 23 half-widths wide.
 
-```
-        ◇            <- pointy top / bottom (vertex)
-      ◇   ◇
-    ◇       ◇
-  |           |      <- the two vertical sides, 16 cells each
-  |           |
-    ◇       ◇
-      ◇   ◇
-        ◇
-```
+![Hex Tetris screenshot](screenshot.png)
+
+*(Left: the hexagonal board. Right: the score panel. The faint hexagons are the landing preview of the current piece.)*
 
 ## Line-clear rule (rows parallel to the bottom edges)
 
