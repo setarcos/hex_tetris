@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (C) 2026 Pluto Yang
+# SPDX-License-Identifier: GPL-3.0-or-later
 """六边形网格俄罗斯方块 (Hex Tetris) —— 六边形棋盘 / 斜线消行
 
 网格结构:

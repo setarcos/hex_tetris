@@ -1,105 +1,119 @@
-# 六边形网格俄罗斯方块 (Hex Tetris)
+# Hex Tetris
 
-纯 `pygame-ce` 实现的六边形俄罗斯方块。棋盘本身是一个六边形，只有**斜线**填满才消行。
-不再使用任何图片素材。
+A hex-grid Tetris written in pure `pygame-ce`. The board itself is a hexagon, and only **diagonal lines** clear when filled.
+No image assets are used.
 
-## 棋盘结构
+[中文说明](README.zh-CN.md) · [License: GPL-3.0-or-later](#license)
 
-- 格子是**平顶 (flat-top)** 六边形，按轴向坐标 `(q, r)` 排列，每一列是竖直直线。
-- 整个棋盘是一个六边形：`|q| ≤ 7`，`|r| ≤ 11`，`|s| ≤ 11`（`s = -q - r`）。
-- 六条边依次是 **16, 8, 8, 16, 8, 8** 格（即 8×8×16×8×8×16）：
-  左右两条竖边 `q = ±7` 各 **16 格**，其余四条斜边各 8 格。共 **289 格**。
-- 最高的一列（`q = 0`）有 23 格，所以棋盘纵向 23 个行距、横向 23 个半宽。
+## Board structure
+
+- Cells are **flat-top** hexagons laid out in axial coordinates `(q, r)`; every column is a straight vertical line.
+- The whole board is a hexagon: `|q| ≤ 7`, `|r| ≤ 11`, `|s| ≤ 11` (`s = -q - r`).
+- Its six sides are, in order, **16, 8, 8, 16, 8, 8** cells (i.e. 8×8×16×8×8×16):
+  the two vertical sides `q = ±7` have **16 cells** each, the other four slanted sides have 8 each. **289 cells** in total.
+- The tallest column (`q = 0`) has 23 cells, so the board is 23 row-heights tall and 23 half-widths wide.
 
 ```
-        ◇            <- 顶部/底部是尖角（顶点）
+        ◇            <- pointy top / bottom (vertex)
       ◇   ◇
     ◇       ◇
-  |           |      <- 左右两条竖边各 16 格
+  |           |      <- the two vertical sides, 16 cells each
   |           |
     ◇       ◇
       ◇   ◇
         ◇
 ```
 
-## 消行规则（与底边平行的行）
+## Line-clear rule (rows parallel to the bottom edges)
 
-行是与底边（左下 / 右下斜边）平行的斜线，并按左右两半分开判定，每行最多 8 格：
+A row is a diagonal parallel to a bottom edge (lower-left / lower-right), judged per half; each row holds at most 8 cells:
 
-| 行 | 所在列 | 方向 | 是否消行 |
-|----|--------|------|----------|
-| `r = 常数` | 左 8 列 `q = -7..0` | 与左下斜边平行 | ✅ 恰好 8 格且填满才消 |
-| `s = 常数` | 右 8 列 `q =  0..7` | 与右下斜边平行 | ✅ 恰好 8 格且填满才消 |
-| `q = 常数` | 竖直列 | — | ❌ 不消 |
+| Row | Columns | Direction | Clears? |
+|-----|---------|-----------|---------|
+| `r = const` | left 8 columns `q = -7..0` | parallel to the lower-left edge | ✅ only when exactly 8 cells and all filled |
+| `s = const` | right 8 columns `q = 0..7` | parallel to the lower-right edge | ✅ only when exactly 8 cells and all filled |
+| `q = const` | vertical column | — | ❌ never clears |
 
-- 棋盘六边形左右对称：左半用 `r` 斜线、右半用 `s` 斜线，两条底边（各 8 格）就是最底下两行。
-- 每行只占半边，所以判定时**只需看左边 8 列或右边 8 列**；靠近顶点的行会自然变短（最多 8 格），
-  这些**不足 8 格的行不参与消除**，即使填满也不消。
-- **消行后**，同一竖列中位于被消格子上方的方块**整体下落**，下落格数 = 该列被消去的格子数（顶部的空洞保持不变）。
+- The board is left-right symmetric: the left half uses `r` diagonals, the right half uses `s` diagonals, and the two bottom edges (8 cells each) are the bottom two rows.
+- Since each row covers only one half, a check only looks at the left 8 or right 8 columns; rows near the vertices are naturally shorter (at most 8),
+  and such **rows with fewer than 8 cells never clear**, even when completely filled.
+- **After a clear**, blocks above the cleared cells **fall down** within each vertical column by exactly the number of cells removed from that column (gaps at the top stay).
 
-## 移动 / 下落
+## Movement / falling
 
-- **重力**：同一列里 `r + 1`，轴向 `Δ(0, +1)`，**始终垂直、每次只下落 1 格**。
-- **左右**：相邻列在竖直方向错开半格，所以左右移动必然是**斜下**：
-  - 左 = 左下 `Δ(-1, +1)`
-  - 右 = 右下 `Δ(+1,  0)`
+- **Gravity**: within a column `r + 1`, axial `Δ(0, +1)` — **always vertical, one cell at a time**.
+- **Left / right**: adjacent columns are offset by half a cell vertically, so horizontal movement is necessarily **diagonal downward**:
+  - left = down-left `Δ(-1, +1)`
+  - right = down-right `Δ(+1, 0)`
 
-| 按键 | 功能 |
-|------|------|
-| `←` `→` / `A` `D` | 左下 / 右下 斜向移动 |
-| `↑` / `X` / `W` | 顺时针旋转 60° |
-| `Z` | 逆时针旋转 60° |
-| `↓` / `S` | 加速下降（仍为垂直 1 格） |
-| `空格` | 硬降 |
-| `Alt`+`Enter` | 全屏 / 窗口切换 |
-| `P` | 暂停 / 继续 |
-| `R` | 重新开始 |
-| `Esc` | 退出 |
+| Key | Action |
+|-----|--------|
+| `←` `→` / `A` `D` | move down-left / down-right |
+| `↑` / `X` / `W` | rotate 60° clockwise |
+| `Z` | rotate 60° counter-clockwise |
+| `↓` / `S` | soft drop (still vertical, one cell at a time) |
+| `Space` | hard drop |
+| `Alt`+`Enter` | toggle fullscreen / windowed |
+| `P` | pause / resume |
+| `R` | restart |
+| `Esc` | quit |
 
-## 最高分（Top 5）
+## High scores (Top 5)
 
-- 面板显示**最高分**和 **TOP 5** 排行榜。
-- 游戏结束时若得分能进入前 5，会提示**输入名字**（最多 10 个字符，`Backspace` 删除），
-  `Enter` 确认；不输入直接确认则记为“无名玩家”。
-- 记录保存在脚本同目录的 `highscores.json`（首次创纪录时自动创建），
-  文件缺失或损坏时视为暂无记录，不影响游戏运行。
+- The panel shows the **best score** and a **TOP 5** leaderboard.
+- When the game ends with a score that makes the top 5, you are asked to **enter a name**
+  (up to 10 characters, `Backspace` to delete, `Enter` to confirm); confirming with an empty name stores "无名玩家".
+- Scores are kept in `highscores.json` next to the script (created on the first record).
+  A missing or corrupted file is treated as "no records yet" and never breaks the game.
 
-## 窗口
+## Window
 
-窗口**可自由缩放**，棋盘会自动缩放以完整放进窗口（默认按屏幕大小开一个合适尺寸）。
-不会出现网格被裁掉的情况。按 `Alt`+`Enter` 可在**全屏**与**窗口**模式间切换
-（全屏时按桌面分辨率重新布局，退出全屏后恢复原来的窗口大小）。
+The window is **freely resizable** and the board rescales to fit entirely inside it (a sensible size is
+chosen at startup based on your screen). The grid is never clipped. `Alt`+`Enter` toggles **fullscreen** and
+**windowed** mode (fullscreen re-lays out at the desktop resolution; leaving fullscreen restores the previous window size).
 
-## 运行
+## Running
 
 ```bash
 cd hex_tetris
-python3 -m venv .venv                        # 已创建过可跳过
-.venv/bin/pip install pygame-ce              # 已安装可跳过
+python3 -m venv .venv                        # skip if already created
+.venv/bin/pip install pygame-ce              # skip if already installed
 .venv/bin/python hex_tetris.py
 ```
 
-## 自检
+## Self-checks
 
-`test_hex_logic.py` 做无头逻辑自检并输出渲染截图 `/tmp/hex_shot.png`：
+`test_hex_logic.py` runs headless logic checks and writes a rendered screenshot to `/tmp/hex_shot.png`:
 
 ```bash
 .venv/bin/python test_hex_logic.py
 ```
 
-覆盖：棋盘六边长度（16,8,8,16,8,8）与格数、方块连通性、下落垂直且 1 格、左右斜下、
-旋转等距、**行 = 左/右半斜线**、**满 8 格消除 + 上方整体下落**、**不足 8 格不消**、**竖列不消**、
-生成/锁定（含出生点被占即结束），以及整区渲染。
+Covered: side lengths (16,8,8,16,8,8) and cell count, piece connectivity, vertical one-cell falling,
+diagonal left/right movement, rigid rotation, **rows = left/right half diagonals**, **clearing a full 8-cell row
+plus falling of everything above**, **short rows never clearing**, **vertical columns never clearing**,
+spawn/lock (including game over when the spawn area is occupied), and whole-board rendering.
 
-## 方块全集
+## All tetrahexes
 
-`utils/find_pieces.py` 穷举六边形网格上全部独立的四格连通方块（旋转去重、镜像另算），
-图形化输出为 `utils/pieces.png`，并与现有 `PIECES` 对照：
+`utils/find_pieces.py` enumerates every distinct 4-cell connected shape on the hex grid
+(deduplicated by rotation, mirrors counted separately), draws them to `utils/pieces.png` and compares
+them with the `PIECES` table in the game:
 
 ```bash
-.venv/bin/python utils/find_pieces.py            # 弹窗显示并保存 utils/pieces.png
-.venv/bin/python utils/find_pieces.py --no-show  # 只保存图片
+.venv/bin/python utils/find_pieces.py            # show a window and save utils/pieces.png
+.venv/bin/python utils/find_pieces.py --no-show  # save the image only
 ```
 
-结果：固定摆放 44 种，旋转去重后 **10 种独立方块**（连镜像也去重则 7 种）。
-游戏现已收录全部 10 种：`I O N Y`（自身镜像）与互为镜像的 `T/L`、`J/R`、`S/Z`。
+Result: 44 fixed placements, **10 distinct pieces** after rotation dedup (7 if mirrors are deduplicated too).
+The game ships all 10: `I O N Y` (self-mirrored) and the mirror pairs `T/L`, `J/R`, `S/Z`.
+
+## License
+
+Copyright (C) 2026 Pluto Yang.
+
+This project is free software: you can redistribute it and/or modify it under the terms of the
+**GNU General Public License, version 3 or (at your option) any later version**
+(`GPL-3.0-or-later`). It is distributed in the hope that it will be useful, but **without any warranty**,
+without even the implied warranty of merchantability or fitness for a particular purpose.
+See the [LICENSE](LICENSE) file for the full text of the GNU General Public License v3.

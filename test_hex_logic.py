@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (C) 2026 Pluto Yang
+# SPDX-License-Identifier: GPL-3.0-or-later
 """hex_tetris 的逻辑自检 + 无头渲染快照。"""
 
 import os

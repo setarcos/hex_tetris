@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (C) 2026 Pluto Yang
+# SPDX-License-Identifier: GPL-3.0-or-later
 """搜索并图形化显示六边形网格上全部独立的四格方块（tetrahex）。
 
 规则
