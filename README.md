@@ -93,12 +93,12 @@ python3 -m venv .venv                        # 已创建过可跳过
 
 ## 方块全集
 
-`find_pieces.py` 穷举六边形网格上全部独立的四格连通方块（旋转去重、镜像另算），
-图形化输出为 `pieces.png`，并与现有 `PIECES` 对照：
+`utils/find_pieces.py` 穷举六边形网格上全部独立的四格连通方块（旋转去重、镜像另算），
+图形化输出为 `utils/pieces.png`，并与现有 `PIECES` 对照：
 
 ```bash
-.venv/bin/python find_pieces.py            # 弹窗显示并保存 pieces.png
-.venv/bin/python find_pieces.py --no-show  # 只保存图片
+.venv/bin/python utils/find_pieces.py            # 弹窗显示并保存 utils/pieces.png
+.venv/bin/python utils/find_pieces.py --no-show  # 只保存图片
 ```
 
 结果：固定摆放 44 种，旋转去重后 **10 种独立方块**（连镜像也去重则 7 种）。
