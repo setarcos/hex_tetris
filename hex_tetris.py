@@ -181,6 +181,7 @@ SPAWN_PAUSE = 150
 MARGIN = 24
 PANEL_W = 290
 GAP = 24
+PANEL_DESIGN_H = 600   # 面板内容完整显示所需的高度；更矮时字号/行距一起等比缩小
 S_MIN, HEX_MAX = 7.0, 40.0
 
 FONT_CANDIDATES = [
@@ -406,6 +407,7 @@ class Game:
         self.f_big = load_font(26)
         self.f_mid = load_font(20)
         self.f_small = load_font(16)
+        self.font_cache = {}
         self.highscores = load_highscores()
         self.name_entry = None
         self.last_rank = None
@@ -633,6 +635,14 @@ class Game:
                 self.lock()
 
     # -- 绘制 ---------------------------------------------------------------
+    def font(self, size):
+        """按字号取字体（面板随窗口高度缩放时复用）。"""
+        size = max(8, int(size))
+        f = self.font_cache.get(size)
+        if f is None:
+            f = self.font_cache[size] = load_font(size)
+        return f
+
     def text(self, s, font, color, pos, center=False, right=False):
         img = font.render(s, True, color)
         rect = img.get_rect()
@@ -679,48 +689,67 @@ class Game:
         pygame.draw.rect(panel, (*BORDER_COLOR, 90), panel.get_rect(), 2, border_radius=16)
         self.screen.blit(panel, r.topleft)
 
-        self.text("HEX TETRIS", self.f_title, (240, 210, 70), (r.centerx, r.top + 34), center=True)
-        self.text(TEXT["subtitle"], self.f_small, TEXT_DIM,
-                  (r.centerx, r.top + 62), center=True)
+        # 面板内容随可用高度整体等比缩放：矮窗口里字号和行距一起变小，不会互相挤压
+        k = min(1.0, r.height / PANEL_DESIGN_H)
+        f_title = self.font(34 * k)
+        f_big = self.font(26 * k)
+        f_mid = self.font(20 * k)
+        f_small = self.font(16 * k)
+        pad = max(8, int(26 * k))
+        row = f_small.get_linesize()          # 帮助/排行榜行高，跟字体走
 
-        self.text("NEXT", self.f_mid, (80, 220, 230), (r.left + 26, r.top + 84))
-        box = pygame.Rect(r.left + 26, r.top + 106, r.width - 52, 120)
+        y = r.top + int(12 * k)
+        self.text("HEX TETRIS", f_title, (240, 210, 70),
+                  (r.centerx, y + f_title.get_height() // 2), center=True)
+        y += f_title.get_height() + int(4 * k)
+        self.text(TEXT["subtitle"], f_small, TEXT_DIM,
+                  (r.centerx, y + f_small.get_height() // 2), center=True)
+        y += f_small.get_height() + int(10 * k)
+
+        self.text("NEXT", f_mid, (80, 220, 230), (r.left + pad, y))
+        y += f_mid.get_height() + int(6 * k)
+        box = pygame.Rect(r.left + pad, y, r.width - 2 * pad, max(40, int(120 * k)))
         pygame.draw.rect(self.screen, (40, 70, 60), box, 2, border_radius=10)
-        self.draw_preview(self.next_name, box, max(7, int(S * 0.75)))
+        self.draw_preview(self.next_name, box,
+                          max(5, int(min(S * 0.75, box.height * 0.28))))
 
-        y = box.bottom + 22
+        y = box.bottom + int(22 * k)
+        step = max(f_big.get_linesize(), int(38 * k))
         for label, value in ((TEXT["score"], self.score), (TEXT["best"], self.best_score()),
                              (TEXT["lines"], self.lines), (TEXT["level"], self.level)):
-            self.text(label, self.f_mid, TEXT_DIM, (r.left + 26, y))
-            self.text(str(value), self.f_big, (235, 240, 238), (r.right - 26, y - 4), right=True)
-            y += 38
+            self.text(label, f_mid, TEXT_DIM, (r.left + pad, y))
+            self.text(str(value), f_big, (235, 240, 238),
+                      (r.right - pad, y - int(4 * k)), right=True)
+            y += step
 
         lines = TEXT["help"]
-        help_top = r.bottom - 24 - 20 * len(lines)
+        help_top = r.bottom - int(24 * k) - row * len(lines)
 
         # Top 5（窗口太矮时自动少显示几行）
-        y += 4
-        if y + 28 + 20 <= help_top:
-            self.text("TOP 5", self.f_mid, (80, 220, 230), (r.left + 26, y))
-            y += 28
+        y += int(4 * k)
+        top_label_h = f_mid.get_height() + int(8 * k)
+        if y + top_label_h + row <= help_top:
+            self.text("TOP 5", f_mid, (80, 220, 230), (r.left + pad, y))
+            y += top_label_h
             if not self.highscores:
-                self.text(TEXT["no_records"], self.f_small, TEXT_DIM, (r.left + 26, y))
+                self.text(TEXT["no_records"], f_small, TEXT_DIM, (r.left + pad, y))
             for i, entry in enumerate(self.highscores, 1):
-                if y + 20 > help_top:
+                if y + row > help_top:
                     break
                 top = entry["score"] == self.best_score()
                 color = (240, 210, 70) if top else (235, 240, 238)
-                self.text(str(i), self.f_small, TEXT_DIM, (r.left + 26, y))
-                name = fit_text(entry["name"], self.f_small, r.width - 52 - 32 - 80)
-                self.text(name, self.f_small, color, (r.left + 52, y))
-                self.text(str(entry["score"]), self.f_small, color,
-                          (r.right - 26, y), right=True)
-                y += 22
+                self.text(str(i), f_small, TEXT_DIM, (r.left + pad, y))
+                name = fit_text(entry["name"], f_small,
+                                r.width - 3 * pad - int(80 * k))
+                self.text(name, f_small, color, (r.left + 2 * pad, y))
+                self.text(str(entry["score"]), f_small, color,
+                          (r.right - pad, y), right=True)
+                y += row
 
         y = help_top
         for line in lines:
-            self.text(line, self.f_small, TEXT_DIM, (r.left + 26, y))
-            y += 20
+            self.text(line, f_small, TEXT_DIM, (r.left + pad, y))
+            y += row
 
     def overlay(self, title, subtitle, color):
         shade = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
