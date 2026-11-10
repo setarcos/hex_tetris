@@ -26,6 +26,7 @@
 运行:  .venv/bin/python hex_tetris.py
 """
 
+import array
 import json
 import locale
 import math
@@ -64,6 +65,7 @@ STRINGS = {
             "↓ / S      加速下降",
             "空格       硬降",
             "Alt+Enter  全屏切换",
+            "M          音效开关",
             "P 暂停   R 重开   Esc 退出",
         ],
         "no_records": "暂无记录",
@@ -92,6 +94,7 @@ STRINGS = {
             "↓ / S      Soft drop",
             "Space      Hard drop",
             "Alt+Enter  Fullscreen",
+            "M          Mute",
             "P Pause  R Restart  Esc Quit",
         ],
         "no_records": "No records yet",
@@ -153,6 +156,99 @@ COLORS = {
     "N": (235, 120, 200),
     "Y": (170, 210, 80),
 }
+
+# ------------------------------------------------------------------ 音效
+# 所有音效都用代码合成（正弦/方波 + 衰减包络），不加载任何音频文件。
+# 没有可用音频设备时自动静音；HEX_TETRIS_SOUND=0 可强制关闭。
+SOUND_ENABLED = os.environ.get("HEX_TETRIS_SOUND", "1").lower() not in (
+    "0", "off", "false", "no")
+SOUND_MASTER = 0.7
+
+
+def _note(freq, dur, volume=0.5, slide=None, kind="sine"):
+    """一个音符：频率 Hz、时长秒、音量、可选滑音终点、波形。"""
+    return (freq, dur, volume, slide, kind)
+
+
+SOUND_SPECS = {
+    "move": [_note(240, 0.035, 0.22, kind="square")],
+    "rotate": [_note(360, 0.04, 0.22, kind="square"),
+               _note(500, 0.03, 0.18, kind="square")],
+    "lock": [_note(190, 0.09, 0.5, slide=90)],
+    "clear1": [_note(523, 0.07, 0.4), _note(784, 0.12, 0.4)],
+    "clear2": [_note(523, 0.06, 0.4), _note(659, 0.06, 0.4),
+               _note(784, 0.14, 0.4)],
+    "clear3": [_note(523, 0.06, 0.4), _note(659, 0.06, 0.4),
+               _note(784, 0.06, 0.4), _note(1047, 0.16, 0.4)],
+    "level": [_note(0, 0.22, 0.0), _note(659, 0.09, 0.4),
+              _note(988, 0.16, 0.4)],
+    "over": [_note(392, 0.16, 0.4, slide=330),
+             _note(262, 0.32, 0.4, slide=110)],
+    "pause": [_note(520, 0.05, 0.28, kind="square")],
+}
+
+
+def _build_sound(parts, rate, channels):
+    """把音符序列合成为 mixer 当前格式的 Sound。"""
+    data = array.array("h")
+    for freq, dur, volume, slide, kind in parts:
+        n = max(1, int(rate * dur))
+        end = freq if slide is None else slide
+        phase = 0.0
+        attack = max(1, int(rate * 0.004))     # 4ms 淡入，避免爆音
+        for i in range(n):
+            t = i / n
+            phase += math.tau * (freq + (end - freq) * t) / rate
+            wave = math.sin(phase)
+            if kind == "square":
+                wave = 0.65 if wave >= 0 else -0.65
+            env = min(1.0, i / attack) * (1.0 - t) ** 1.6
+            value = int(max(-1.0, min(1.0, wave * env * volume * SOUND_MASTER)) * 32767)
+            for _ in range(channels):
+                data.append(value)
+    return pygame.mixer.Sound(buffer=data.tobytes())
+
+
+class SoundBank:
+    """按名字播放音效；无音频设备时所有调用都是空操作。"""
+
+    def __init__(self, enabled=True):
+        self.enabled = enabled and SOUND_ENABLED
+        self.sounds = {}
+        if not self.enabled:
+            return
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            init = pygame.mixer.get_init()
+            if not init or abs(init[1]) != 16:      # 只合成 16 位采样
+                self.enabled = False
+                return
+            rate, _, channels = init
+            self.sounds = {name: _build_sound(parts, rate, abs(channels))
+                           for name, parts in SOUND_SPECS.items()}
+        except (pygame.error, ValueError):
+            self.enabled = False
+            self.sounds = {}
+
+    def play(self, name):
+        if not self.enabled:
+            return
+        sound = self.sounds.get(name)
+        if sound is not None:
+            sound.play()
+
+    def toggle(self):
+        if not self.sounds:
+            return self.enabled
+        self.enabled = not self.enabled
+        if not self.enabled:
+            try:
+                pygame.mixer.stop()
+            except pygame.error:
+                pass
+        return self.enabled
+
 
 BG_COLOR = (10, 12, 17)
 PANEL_COLOR = (16, 20, 27)
@@ -409,6 +505,7 @@ class Game:
         self.f_small = load_font(16)
         self.font_cache = {}
         self.highscores = load_highscores()
+        self.sounds = SoundBank()
         self.name_entry = None
         self.last_rank = None
         self.reset()
@@ -475,6 +572,8 @@ class Game:
             self.piece["q"] += dq
             self.piece["r"] += dr
             self.lock_timer = 0
+            if delta != DOWN:
+                self.sounds.play("move")
             return True
         return False
 
@@ -491,6 +590,7 @@ class Game:
                 p["q"] += dq
                 p["r"] += dr
                 self.lock_timer = 0
+                self.sounds.play("rotate")
                 return True
         return False
 
@@ -524,11 +624,19 @@ class Game:
             self.filled[c] = COLORS[self.piece["name"]]
 
         n = clear_full_lines(self.filled)
+        leveled = False
         if n:
             score_table = {1: 100, 2: 400, 3: 900}
             self.lines += n
             self.score += score_table.get(n, n * n * 100) * self.level
-            self.level = 1 + self.lines // 10
+            new_level = 1 + self.lines // 10
+            leveled = new_level > self.level
+            self.level = new_level
+            self.sounds.play("clear3" if n >= 3 else f"clear{n}")
+        else:
+            self.sounds.play("lock")
+        if leveled:
+            self.sounds.play("level")
 
         self.piece = self.spawn(self.next_name)
         self.next_name = self.draw_name()
@@ -551,6 +659,7 @@ class Game:
         return self.score > self.highscores[-1]["score"]
 
     def finish_game(self):
+        self.sounds.play("over")
         self.game_over = True
         self.name_entry = "" if self.qualifies() else None
 
@@ -577,6 +686,9 @@ class Game:
             elif text and text.isprintable() and len(self.name_entry) < HIGHSCORE_NAME_LIMIT:
                 self.name_entry += text
             return True
+        if key == pygame.K_m:
+            self.sounds.toggle()
+            return True
         if key == pygame.K_r:
             self.reset()
             return True
@@ -584,6 +696,7 @@ class Game:
             return True
         if key == pygame.K_p:
             self.paused = not self.paused
+            self.sounds.play("pause")
             return True
         if self.paused:
             return True

@@ -47,6 +47,7 @@ A row is a diagonal parallel to a bottom edge (lower-left / lower-right), judged
 | `↓` / `S` | soft drop (still vertical, one cell at a time) |
 | `Space` | hard drop |
 | `Alt`+`Enter` | toggle fullscreen / windowed |
+| `M` | toggle sound effects |
 | `P` | pause / resume |
 | `R` | restart |
 | `Esc` | quit |
@@ -58,6 +59,13 @@ A row is a diagonal parallel to a bottom edge (lower-left / lower-right), judged
   (up to 10 characters, `Backspace` to delete, `Enter` to confirm); confirming with an empty name stores "无名玩家".
 - Scores are kept in `highscores.json` next to the script (created on the first record).
   A missing or corrupted file is treated as "no records yet" and never breaks the game.
+
+## Sound effects
+
+Move, rotate, lock, line clear, level up, pause and game over all have sound effects. They are
+**synthesized in code** (no audio files are loaded), so the game still ships as a single script.
+Press `M` to mute/unmute. If no audio device is available the game runs silently; set
+`HEX_TETRIS_SOUND=0` to turn sound off from the start.
 
 ## Window
 
