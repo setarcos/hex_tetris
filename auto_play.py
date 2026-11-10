@@ -230,6 +230,8 @@ def play_window(fast=False, seed=None):
                     plan = []
                 elif game.name_entry is not None:
                     game.on_key(event.key, event.unicode)
+                elif event.key == pygame.K_m:
+                    game.sounds.toggle()
                 elif event.key == pygame.K_p and not game.game_over:
                     game.paused = not game.paused
 
