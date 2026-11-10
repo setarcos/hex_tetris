@@ -35,6 +35,11 @@ import random
 
 import pygame
 
+try:                     # 只用于探测字形覆盖，画字仍然走 pygame.font
+    from pygame import freetype as _freetype
+except ImportError:
+    _freetype = None
+
 # ------------------------------------------------------------------ 棋盘拓扑
 # 棋盘六边形的三条"半轴"：|q|<=Q_MAX, |r|<=R_MAX, |s|<=S_MAX
 Q_MAX, R_MAX, S_MAX = 7, 11, 11
@@ -125,8 +130,8 @@ def detect_lang():
     return "zh" if value.startswith("zh") else "en"
 
 
-TEXT = STRINGS[detect_lang()]
-DEFAULT_PLAYER_NAME = TEXT["anon"]
+# TEXT / DEFAULT_PLAYER_NAME 在字体探测之后确定（见文件下方的 _build_text），
+# 因为选不到中文字体时要退回英文界面。
 
 # 十种独立方块（轴向坐标），每种 4 格。六边形网格上四格连通块共 10 种
 # （旋转去重、镜像另算，穷举见 find_pieces.py）：
@@ -280,11 +285,139 @@ GAP = 24
 PANEL_DESIGN_H = 600   # 面板内容完整显示所需的高度；更矮时字号/行距一起等比缩小
 S_MIN, HEX_MAX = 7.0, 40.0
 
-FONT_CANDIDATES = [
-    os.path.expanduser("~/.local/share/fonts/msyh.ttc"),
-    os.path.expanduser("~/.local/share/fonts/DroidSansFallback.ttf"),
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-]
+# ------------------------------------------------------- 字体探测与降级
+# 不写死任何字体路径：pygame.font.get_fonts() 给出的就是系统已注册的字体
+# （Linux 走 fontconfig、Windows 走注册表、macOS 扫字体目录），再用 freetype
+# 实测字形——能画出中文才算数。都没有就退回英文界面，缺箭头就换成 ASCII，
+# 避免屏幕上一堆豆腐块。
+
+# 家族名按偏好排序（pygame 已归一化为小写无空格），只用来决定先试谁；
+# 都不命中时会暴力扫描系统里的其余字体，所以这里漏了也不会漏字体。
+FONT_NAME_KEYWORDS = (
+    "microsoftyahei", "yahei",                          # 微软雅黑
+    "pingfang", "hiragino",                             # macOS
+    "notosanscjk", "notoserifcjk", "sourcehan", "cjk",
+    "wenquanyi", "wqy", "droidsansfallback",
+    "simhei", "simsun", "heiti", "songti", "kaiti",
+    "dengxian", "microsoftjhenghei", "msjh", "uming", "ukai",
+)
+
+# 细体/极细体做 HUD 太刺眼，排在常规字重之后；…UI 变体在 fontconfig 里
+# 常常指向某个奇怪的权重（本机 “Microsoft YaHei UI” 就落到 Light）
+LIGHT_STYLES = ("light", "thin", "ultralight", "extralight", "hairline")
+
+CJK_PROBE = "中文棋盘六边形方块消行得分等级暂停音效开关重开退出"
+ARROW_PROBE = "←↑→↓"
+GLYPH_FALLBACK = {"←": "<", "→": ">", "↑": "^", "↓": "v",
+                  "↔": "<>", "…": "..."}
+
+_FONT_CHOICE = None   # (path 或 None, 是否有中文字形)
+
+
+def _has_glyphs(path, sample):
+    """用 freetype 实测字形：某个字符拿不到度量，就说明字体里没有它。
+
+    光看度量不够——彩色/符号字体（如 NotoColorEmoji）会给任何字符都返度量，
+    所以还要求样本里前几个字真能画出不同的图（位图字体则会直接报错）。
+    freetype 整个模块不存在时无法探测，只能相信字体本身，返回 True。
+    """
+    if _freetype is None:
+        return True
+    try:
+        _freetype.init()   # 模块被导入时 pygame.init() 可能还没跑
+        face = _freetype.Font(path, 16)
+        if any(face.get_metrics(ch) == [None] for ch in sample):
+            return False
+        if len(sample) < 2:
+            return True
+        shots = {pygame.image.tostring(face.render(ch)[0], "RGBA")
+                 for ch in sample[:3]}
+        return len(shots) > 1
+    except (OSError, RuntimeError, ValueError, pygame.error):
+        return False       # 打不开或画不出来：当这个字体不能用，换下一个
+
+
+def _font_paths():
+    """依次给出系统字体文件：先关键词命中的常规字重，再其余，最后细体。"""
+    try:
+        pygame.font.init()
+        names = pygame.font.get_fonts()
+    except pygame.error:
+        names = []
+
+    def styled(name):
+        return name.endswith("ui") or any(s in name for s in LIGHT_STYLES)
+
+    order, used = [], set()
+    for keyword in FONT_NAME_KEYWORDS:
+        for name in names:
+            if name in used or styled(name):
+                continue
+            if keyword in name:
+                used.add(name)
+                order.append(name)
+    rest = [n for n in names if n not in used]
+    order.extend(n for n in rest if not styled(n))
+    order.extend(n for n in rest if styled(n))
+    seen = set()
+    for name in order:
+        path = pygame.font.match_font(name)
+        if path and path not in seen:
+            seen.add(path)
+            yield path
+
+
+def resolve_font():
+    """挑一个能满足需求的字体，结果缓存。返回 (path, 支持中文)。
+
+    优先“中文 + 箭头”都有的，退一步只要中文，最后才用 pygame 自带字体
+    （path 为 None）。
+    """
+    global _FONT_CHOICE
+    if _FONT_CHOICE is None:
+        cjk_only = None
+        for path in _font_paths():
+            if not _has_glyphs(path, CJK_PROBE):
+                continue
+            if _has_glyphs(path, ARROW_PROBE):
+                _FONT_CHOICE = (path, True)
+                break
+            if cjk_only is None:
+                cjk_only = (path, True)
+        if _FONT_CHOICE is None:
+            _FONT_CHOICE = cjk_only or (None, False)
+    return _FONT_CHOICE
+
+
+def _glyph_table():
+    """当前字体缺哪些字形，就给这些字符准备 ASCII 替身。"""
+    path = resolve_font()[0]
+    return {bad: good for bad, good in GLYPH_FALLBACK.items()
+            if not _has_glyphs(path, bad)}
+
+
+def _replace_glyphs(value, table):
+    if isinstance(value, str):
+        for bad, good in table.items():
+            value = value.replace(bad, good)
+        return value
+    if isinstance(value, list):
+        return [_replace_glyphs(v, table) for v in value]
+    return value
+
+
+def _build_text():
+    """选文案语言：locale 要中文但机器没有中文字体时，退回英文。"""
+    lang = detect_lang()
+    if lang == "zh" and not resolve_font()[1]:
+        lang = "en"
+    text = dict(STRINGS[lang])
+    table = _glyph_table()
+    return {k: _replace_glyphs(v, table) for k, v in text.items()}
+
+
+TEXT = _build_text()
+DEFAULT_PLAYER_NAME = TEXT["anon"]
 
 # ------------------------------------------------------------------ 棋盘数据
 BOARD_CELLS = [(q, r)
@@ -486,12 +619,12 @@ def fit_text(s, font, max_w):
 
 
 def load_font(size):
-    for path in FONT_CANDIDATES:
-        if os.path.exists(path):
-            try:
-                return pygame.font.Font(path, size)
-            except pygame.error:
-                pass
+    path = resolve_font()[0]
+    if path:
+        try:
+            return pygame.font.Font(path, size)
+        except pygame.error:
+            pass
     return pygame.font.Font(None, size)
 
 
