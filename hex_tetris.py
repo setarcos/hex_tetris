@@ -19,7 +19,10 @@
 
 移动/下落:
     - 重力: 同一列里行 +1，axial Δ(0, +1)，始终垂直、每次 1 格。
-    - 左右: 到相邻列必然是斜下 —— 左 = (-1, +1)，右 = (+1, 0)。
+    - 左右: 跨一列必然带半格的竖向分量，同方向连按时竖向交替:
+          左 = 左下 (-1, +1) / 左上 (-1, 0)，右 = 右下 (+1, 0) / 右上 (+1, -1)。
+          即连按左是“左下 → 左上 → 左下…”，横着走、不会一直往下沉；
+          轮到的那一步被墙/方块挡住时改走同方向的另一斜向。
 
 窗口可自由缩放，棋盘会自动缩放以完整放进窗口。
 
@@ -64,7 +67,7 @@ STRINGS = {
         "lines": "消行",
         "level": "等级",
         "help": [
-            "←/→  A/D   斜下移动",
+            "←/→  A/D   左右移动",
             "↑ / X      顺时针旋转",
             "Z          逆时针旋转",
             "↓ / S      加速下降",
@@ -263,8 +266,12 @@ TEXT_DIM = (150, 175, 165)
 
 # 三个移动方向（轴向增量）。向下 = 同一列 +1 行，垂直下落 1 格。
 DOWN = (0, 1)
-LEFT = (-1, 1)      # 左下
-RIGHT = (1, 0)      # 右下
+# 左右跨一列有两种竖向分量，同方向连按时交替（斜下 → 斜上 → 斜下 …），
+# 连按左右就是横着走；首选被挡时改走另一斜向。
+LATERAL_STEPS = {
+    -1: ((-1, 1), (-1, 0)),     # 左: 左下 / 左上
+    1: ((1, 0), (1, -1)),       # 右: 右下 / 右上
+}
 # 旋转踢墙（轴向，均为刚性平移）
 KICKS = [(0, 0), (-1, 1), (1, 0), (0, 1), (0, -1), (-1, 0), (1, -1)]
 
@@ -659,6 +666,8 @@ class Game:
         self.spawn_timer = 0
         self.das_dir = 0
         self.das_timer = 0
+        self.lateral_dir = 0          # 上一次跨列的方向, 0 = 无
+        self.lateral_next_up = False  # 同方向下一步是否先走斜上
         self.piece = self.spawn(self.draw_name())
         self.next_name = self.draw_name()
         if self.piece is None:
@@ -708,6 +717,23 @@ class Game:
             if delta != DOWN:
                 self.sounds.play("move")
             return True
+        return False
+
+    def try_lateral(self, direction):
+        """跨一列：direction 为 -1 向左、+1 向右。
+
+        同一方向连按时竖向交替：先斜下、再斜上、再斜下…… 连按左就是横着往左走、
+        不会一直往下沉。轮到的那一步被墙或方块挡住时，改走同方向的另一斜向，
+        只要相邻列有一侧过得去就能走。
+        """
+        down, up = LATERAL_STEPS[direction]
+        first = up if (self.lateral_dir == direction and self.lateral_next_up) else down
+        second = down if first is up else up
+        for step in (first, second):
+            if self.try_move(step):
+                self.lateral_dir = direction
+                self.lateral_next_up = step is down
+                return True
         return False
 
     def try_rotate(self, direction):
@@ -773,6 +799,8 @@ class Game:
 
         self.piece = self.spawn(self.next_name)
         self.next_name = self.draw_name()
+        self.lateral_dir = 0
+        self.lateral_next_up = False
         self.drop_timer = 0
         self.lock_timer = 0
         self.spawn_timer = SPAWN_PAUSE
@@ -837,10 +865,10 @@ class Game:
             return True
 
         if key in (pygame.K_LEFT, pygame.K_a):
-            self.try_move(LEFT)
+            self.try_lateral(-1)
             self.das_dir, self.das_timer = -1, DAS
         elif key in (pygame.K_RIGHT, pygame.K_d):
-            self.try_move(RIGHT)
+            self.try_lateral(1)
             self.das_dir, self.das_timer = 1, DAS
         elif key in (pygame.K_UP, pygame.K_x, pygame.K_w):
             self.try_rotate(1)
@@ -862,7 +890,7 @@ class Game:
             self.das_timer -= dt
             if self.das_timer <= 0:
                 self.das_timer = DAS_REPEAT
-                self.try_move(LEFT if self.das_dir < 0 else RIGHT)
+                self.try_lateral(self.das_dir)
 
         keys = pygame.key.get_pressed()
         soft = keys[pygame.K_DOWN] or keys[pygame.K_s]

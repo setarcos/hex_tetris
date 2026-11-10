@@ -35,13 +35,17 @@ A row is a diagonal parallel to a bottom edge (lower-left / lower-right), judged
 ## Movement / falling
 
 - **Gravity**: within a column `r + 1`, axial `Δ(0, +1)` — **always vertical, one cell at a time**.
-- **Left / right**: adjacent columns are offset by half a cell vertically, so horizontal movement is necessarily **diagonal downward**:
-  - left = down-left `Δ(-1, +1)`
-  - right = down-right `Δ(+1, 0)`
+- **Left / right**: adjacent columns are offset by half a cell vertically, so one step sideways always carries
+  half a cell of vertical offset. Consecutive moves in the same direction **alternate** that offset, so holding
+  left zig-zags 「down-left → up-left → down-left …」 without sinking:
+  - left = down-left `Δ(-1, +1)` / up-left `Δ(-1, 0)`
+  - right = down-right `Δ(+1, 0)` / up-right `Δ(+1, -1)`
+- If the step that is due is blocked by a wall or a stack, the other diagonal **in the same direction** is used
+  instead. Changing direction, or getting a new tetrahex, restarts from the downward variant.
 
 | Key | Action |
 |-----|--------|
-| `←` `→` / `A` `D` | move down-left / down-right |
+| `←` `→` / `A` `D` | move left / right (alternating up and down) |
 | `↑` / `X` / `W` | rotate 60° clockwise |
 | `Z` | rotate 60° counter-clockwise |
 | `↓` / `S` | soft drop (still vertical, one cell at a time) |
@@ -97,11 +101,11 @@ open the file directly, or serve it:
 
 | Action | Effect |
 |--------|--------|
-| `↙` `↘` buttons | move left-down / right-down, hold to repeat (DAS) |
+| `←` `→` buttons | move left / right (alternating up and down), hold to repeat (DAS) |
 | `↓` button | hold to soft drop |
 | `↻` `↺` buttons | rotate CW / CCW |
 | `⤓` button | hard drop |
-| swipe left / right on board | move one column per hex step |
+| swipe left / right on board | move one column per hex step (also alternating) |
 | drag down and hold on board | soft drop |
 | flick down on board | hard drop |
 | tap on board | rotate CW |

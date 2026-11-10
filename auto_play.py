@@ -51,13 +51,22 @@ def fits_state(game, name, q, r, rot):
     return game.fits([(cq + q, cr + r) for cq, cr in rel_cells(name, rot)])
 
 
+# 左右跨列的四个斜向（一步）。游戏里同方向连按时竖向会交替，
+# 机器人按单步规划，只要落点可达即可。
+LATERAL_MOVES = {
+    "L": (-1, 1),      # 左下
+    "LU": (-1, 0),     # 左上
+    "R": (1, 0),       # 右下
+    "RU": (1, -1),     # 右上
+}
+
+
 def transitions(game, name, q, r, rot):
-    """与 Game.try_move / Game.try_rotate 完全一致的合法走法。"""
+    """与 Game.try_lateral / try_rotate 一致的合法走法。"""
     out = []
-    if fits_state(game, name, q - 1, r + 1, rot):      # LEFT  = 左下
-        out.append(((q - 1, r + 1, rot), "L"))
-    if fits_state(game, name, q + 1, r, rot):          # RIGHT = 右下
-        out.append(((q + 1, r, rot), "R"))
+    for action, (dq, dr) in LATERAL_MOVES.items():
+        if fits_state(game, name, q + dq, r + dr, rot):
+            out.append(((q + dq, r + dr, rot), action))
     if fits_state(game, name, q, r + 1, rot):          # 下落
         out.append(((q, r + 1, rot), "D"))
     for step, move in ((1, "CW"), (-1, "CCW")):
@@ -158,10 +167,8 @@ def best_move(game):
 
 
 def apply_action(game, action):
-    if action == "L":
-        return game.try_move(ht.LEFT)
-    if action == "R":
-        return game.try_move(ht.RIGHT)
+    if action in LATERAL_MOVES:
+        return game.try_move(LATERAL_MOVES[action])
     if action == "D":
         return game.try_move(ht.DOWN)
     if action == "CW":

@@ -145,7 +145,7 @@ const STRINGS = {
     newRecord: '新纪录！输入名字（最多 %d 字符）',
     rank: '第 %d 名 · 最高分 %d',
     bestOnly: '最高分 %d',
-    padHelp: '↙ ↓ ↘ 移动 / 加速 · ↻ ↺ 旋转 · ⤓ 硬降',
+    padHelp: '← ↓ → 移动 / 加速 · ↻ ↺ 旋转 · ⤓ 硬降',
     gestureHelp: '手势：左右滑移动 · 下滑软降 · 下甩硬降 · 轻点旋转',
     anon: '无名玩家', pause: '暂停', soundOn: '关闭音效', soundOff: '打开音效',
     pad: { left: '左移', down: '软降', right: '右移', cw: '顺旋', ccw: '逆旋', drop: '硬降' },
@@ -158,7 +158,7 @@ const STRINGS = {
     newRecord: 'New record! Enter your name (max %d)',
     rank: 'Rank %d · Best %d',
     bestOnly: 'Best %d',
-    padHelp: '↙ ↓ ↘ move / soft drop · ↻ ↺ rotate · ⤓ hard drop',
+    padHelp: '← ↓ → move / soft drop · ↻ ↺ rotate · ⤓ hard drop',
     gestureHelp: 'Touch: swipe to move · drag down to drop · flick to slam · tap to rotate',
     anon: 'Anonymous', pause: 'Pause', soundOn: 'Mute', soundOff: 'Unmute',
     pad: { left: 'Left', down: 'Down', right: 'Right', cw: 'CW', ccw: 'CCW', drop: 'Drop' },
@@ -343,7 +343,13 @@ const bestScore = () => (scores.length ? scores[0].score : 0);
 /* ================================================================ 状态 */
 const GRAVITY_BASE = 1040, GRAVITY_MIN = 180, LOCK_DELAY = 840;
 const DAS = 340, DAS_REPEAT = 110, SOFT_DROP_MS = 55, SPAWN_PAUSE = 150;
-const DOWN = [0, 1], LEFT = [-1, 1], RIGHT = [1, 0];
+const DOWN = [0, 1];
+// 左右跨一列有两种竖向分量，同方向连按时交替（斜下 → 斜上 → 斜下 …），
+// 连按左右就是横着走；首选被挡时改走另一斜向。
+const LATERAL = {
+  '-1': [[-1, 1], [-1, 0]],      // 左：左下 / 左上
+  '1': [[1, 0], [1, -1]],        // 右：右下 / 右上
+};
 const KICKS = [[0, 0], [-1, 1], [1, 0], [0, 1], [0, -1], [-1, 0], [1, -1]];
 
 const state = {
@@ -353,6 +359,7 @@ const state = {
   piece: null, next: null, bag: [],
   dropTimer: 0, lockTimer: 0, spawnTimer: 0,
   dasDir: 0, dasTimer: 0,
+  lateralDir: 0, lateralNextUp: false,   // 同方向连按时竖向上下交替
   softButton: false, softTouch: false,
   nameEntry: null, lastRank: null,
 };
@@ -395,6 +402,7 @@ function reset() {
   state.bag = [];
   state.dropTimer = 0; state.lockTimer = 0; state.spawnTimer = 0;
   state.dasDir = 0; state.dasTimer = 0;
+  state.lateralDir = 0; state.lateralNextUp = false;
   state.softButton = false; state.softTouch = false;
   state.piece = spawn(drawName());
   state.next = drawName();
@@ -412,8 +420,24 @@ function tryMove(dq, dr) {
   if (!fits(cellsAt(p, p.q + dq, p.r + dr))) return false;
   p.q += dq; p.r += dr;
   state.lockTimer = 0;
-  if (dq !== 0) play('move');              // 只有左右斜下才响
+  if (dq !== 0) play('move');              // 只有左右跨列才响
   return true;
+}
+
+// 跨一列：dir 为 -1 向左、+1 向右。同一方向连按时竖向交替：斜下 → 斜上 → 斜下…
+// 轮到的那一步被墙或方块挡住时，改走同方向的另一斜向。
+function moveLateral(dir) {
+  const [down, up] = LATERAL[dir];
+  const first = (state.lateralDir === dir && state.lateralNextUp) ? up : down;
+  const second = first === up ? down : up;
+  for (const step of [first, second]) {
+    if (tryMove(step[0], step[1])) {
+      state.lateralDir = dir;
+      state.lateralNextUp = step === down;
+      return true;
+    }
+  }
+  return false;
 }
 
 function tryRotate(dir) {
@@ -496,6 +520,8 @@ function lock() {
 
   state.piece = spawn(state.next);
   state.next = drawName();
+  state.lateralDir = 0;
+  state.lateralNextUp = false;
   state.dropTimer = 0;
   state.lockTimer = 0;
   state.spawnTimer = SPAWN_PAUSE;
@@ -766,8 +792,8 @@ function doAction(act) {
   if (state.gameOver || state.paused) return;
   if (state.spawnTimer > 0) return;        // 落定后的短暂停顿
   switch (act) {
-    case 'left':  tryMove(LEFT[0], LEFT[1]); state.dasDir = -1; state.dasTimer = DAS; break;
-    case 'right': tryMove(RIGHT[0], RIGHT[1]); state.dasDir = 1; state.dasTimer = DAS; break;
+    case 'left':  moveLateral(-1); state.dasDir = -1; state.dasTimer = DAS; break;
+    case 'right': moveLateral(1); state.dasDir = 1; state.dasTimer = DAS; break;
     case 'cw':    tryRotate(1); break;
     case 'ccw':   tryRotate(-1); break;
     case 'drop':  hardDrop(); break;
@@ -777,7 +803,7 @@ function doAction(act) {
 
 /* ---------------------------------------------------------- 底部按钮 */
 const PAD_BUTTONS = [
-  ['left', '\u2199', 'left'], ['down', '\u2193', 'down'], ['right', '\u2198', 'right'],
+  ['left', '\u2190', 'left'], ['down', '\u2193', 'down'], ['right', '\u2192', 'right'],
   ['cw', '\u21BB', 'cw'], ['ccw', '\u21BA', 'ccw'], ['drop', '\u2913', 'drop'],
 ];
 
@@ -837,8 +863,8 @@ boardWrap.addEventListener('pointermove', e => {
   if (!gesture || e.pointerId !== gesture.id) return;
   const step = Math.max(14, HEX_W * 0.8);         // 拖过一格距就移动一列
   let dx = e.clientX - gesture.x;
-  while (dx >= step) { tryMove(RIGHT[0], RIGHT[1]); gesture.x += step; dx = e.clientX - gesture.x; }
-  while (dx <= -step) { tryMove(LEFT[0], LEFT[1]); gesture.x -= step; dx = e.clientX - gesture.x; }
+  while (dx >= step) { moveLateral(1); gesture.x += step; dx = e.clientX - gesture.x; }
+  while (dx <= -step) { moveLateral(-1); gesture.x -= step; dx = e.clientX - gesture.x; }
 
   const dxTotal = e.clientX - gesture.x0, dyTotal = e.clientY - gesture.y0;
   if (Math.abs(dxTotal) > 10 || Math.abs(dyTotal) > 10) gesture.moved = true;
@@ -908,8 +934,7 @@ function update(dt) {
     state.dasTimer -= dt;
     if (state.dasTimer <= 0) {
       state.dasTimer = DAS_REPEAT;
-      const d = state.dasDir < 0 ? LEFT : RIGHT;
-      tryMove(d[0], d[1]);
+      moveLateral(state.dasDir);
     }
   }
 
@@ -961,9 +986,10 @@ requestAnimationFrame(frame);
 
 // 自检 / 调试入口
 window.__hex = {
-  state, reset, spawn, cellsAt, curCells, fits, tryMove, tryRotate, hardDrop,
+  state, reset, spawn, cellsAt, curCells, fits, tryMove, tryRotate, moveLateral, hardDrop,
   lock, update, clearFullLines, drawName, drawBoard, drawPreview, resize, doAction,
-  BOARD_CELLS, BOARD_SET, ROWS, PIECES, REL, kk, has: (q, r) => state.filled.has(kk(q, r)),
+  BOARD_CELLS, BOARD_SET, ROWS, PIECES, REL, LATERAL, kk,
+  has: (q, r) => state.filled.has(kk(q, r)),
 };
 })();
 </script>

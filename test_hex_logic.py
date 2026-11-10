@@ -62,14 +62,59 @@ def test_fall_is_vertical_one_cell():
                 assert abs((b[1] - a[1]) - H.HEX_H) < 1e-9         # 垂直下落 1 格
 
 
-def test_lateral_is_diagonal_down():
-    for name in H.PIECES:
-        for q, r in H.piece_rel(name, 0):
+def test_lateral_steps_are_diagonal():
+    """左右跨一列: 横向 1.5S; 两种竖向分量各 ±半个六边形高。"""
+    for direction, (down, up) in H.LATERAL_STEPS.items():
+        assert down[0] == up[0] == direction
+        for q, r in H.piece_rel("O", 0):
             x0, y0 = px(q, r)
-            for delta, sx in ((H.LEFT, -1), (H.RIGHT, 1)):
-                x1, y1 = px(q + delta[0], r + delta[1])
-                assert abs((x1 - x0) - sx * 1.5 * H.S) < 1e-9
-                assert abs((y1 - y0) - H.HEX_H / 2) < 1e-9
+            xd, yd = px(q + down[0], r + down[1])
+            xu, yu = px(q + up[0], r + up[1])
+            assert abs(xd - x0 - direction * 1.5 * H.S) < 1e-9
+            assert abs(xu - x0 - direction * 1.5 * H.S) < 1e-9
+            assert abs((yd - y0) - H.HEX_H / 2) < 1e-9
+            assert abs((yu - y0) + H.HEX_H / 2) < 1e-9
+
+
+def test_lateral_alternates_vertical():
+    """同方向连按: 斜下 → 斜上 → 斜下 …（两次净高度不变）；换向重新从斜下开始。"""
+    pygame.init()
+    screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
+    g = H.Game(screen)
+    g.filled.clear()
+    g.piece["q"], g.piece["r"] = -2, 0          # 棋盘中间, 四周都通
+    p = g.piece
+    assert g.fits(g.cur_cells())
+    q0, r0 = p["q"], p["r"]
+
+    assert g.try_lateral(-1) and (p["q"], p["r"]) == (q0 - 1, r0 + 1)   # 左下
+    assert g.try_lateral(-1) and (p["q"], p["r"]) == (q0 - 2, r0 + 1)   # 左上
+    assert g.try_lateral(-1) and (p["q"], p["r"]) == (q0 - 3, r0 + 2)   # 左下
+    assert g.try_lateral(1) and (p["q"], p["r"]) == (q0 - 2, r0 + 2)    # 换向: 右下
+    assert g.try_lateral(1) and (p["q"], p["r"]) == (q0 - 1, r0 + 1)    # 右上
+
+    g.hard_drop()
+    assert g.lateral_dir == 0 and g.lateral_next_up is False             # 新方块重新算
+    pygame.quit()
+
+
+def test_lateral_falls_back_to_other_diagonal():
+    """轮到的那一步被挡时, 同方向的另一斜向仍能走。"""
+    pygame.init()
+    screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
+    g = H.Game(screen)
+    g.filled.clear()
+    g.piece = {"name": "I", "rot": 0, "q": -2, "r": 0}
+    p = g.piece
+    assert g.fits(g.cur_cells())
+    for c in g.cells_at(p, p["q"] - 1, p["r"] + 1):      # 占住左下目标
+        g.filled[c] = (1, 2, 3)
+    assert not g.fits(g.cells_at(p, p["q"] - 1, p["r"] + 1))
+    assert g.fits(g.cells_at(p, p["q"] - 1, p["r"]))
+    assert g.try_lateral(-1)
+    assert (p["q"], p["r"]) == (-3, 0)                  # 改走了左上
+    assert g.lateral_next_up is False                    # 下一次回到左下
+    pygame.quit()
 
 
 def test_rotation_is_rigid():
@@ -249,7 +294,9 @@ if __name__ == "__main__":
     test_board_shape()
     test_pieces_connected()
     test_fall_is_vertical_one_cell()
-    test_lateral_is_diagonal_down()
+    test_lateral_steps_are_diagonal()
+    test_lateral_alternates_vertical()
+    test_lateral_falls_back_to_other_diagonal()
     test_rotation_is_rigid()
     test_rotation_pivots_near_centroid()
     test_rows_are_half_diagonals()
