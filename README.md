@@ -82,6 +82,36 @@ python3 -m venv .venv                        # skip if already created
 .venv/bin/python hex_tetris.py
 ```
 
+## Browser / mobile build (`index.html`)
+
+`index.html` is the same game as a single-file H5 build: identical board, tetrahexes, line-clear rule,
+scoring, gravity/lock delay, synthesized sound effects and Top 5 table. No external dependencies —
+open the file directly, or serve it:
+
+```bash
+.venv/bin/python -m http.server 8000
+# then open http://localhost:8000/ (phones on the same LAN can use it too)
+```
+
+**Touch controls** (buttons and gestures can be mixed):
+
+| Action | Effect |
+|--------|--------|
+| `↙` `↘` buttons | move left-down / right-down, hold to repeat (DAS) |
+| `↓` button | hold to soft drop |
+| `↻` `↺` buttons | rotate CW / CCW |
+| `⤓` button | hard drop |
+| swipe left / right on board | move one column per hex step |
+| drag down and hold on board | soft drop |
+| flick down on board | hard drop |
+| tap on board | rotate CW |
+| `🔊` / `⏸` in the top bar | sound toggle / pause (pause screen shows TOP 5 and help) |
+
+Portrait puts the board on top and the buttons under it (respecting the safe area); landscape puts the
+board on the left and the panel plus buttons on the right. The board always scales to fit and is never
+clipped. Desktop keyboard controls still work (arrows / WASD / Z / Space / P / R / M).
+Scores live in `localStorage`; sound is synthesized with WebAudio.
+
 ## Self-checks
 
 `test_hex_logic.py` runs headless logic checks and writes a rendered screenshot to `/tmp/hex_shot.png`:
