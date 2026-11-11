@@ -342,6 +342,9 @@ const bestScore = () => (scores.length ? scores[0].score : 0);
 
 /* ================================================================ 状态 */
 const GRAVITY_BASE = 1040, GRAVITY_MIN = 180, LOCK_DELAY = 840;
+// 贴地后移动/旋转可以重置锁延迟，但最多这么多次。没有上限时在底部原地连按
+// 就能一直刷新计时，方块永远不落定。
+const LOCK_RESET_MAX = 15;
 const DAS = 340, DAS_REPEAT = 110, SOFT_DROP_MS = 55, SPAWN_PAUSE = 150;
 const DOWN = [0, 1];
 // 左右跨一列有两种竖向分量，同方向连按时交替（斜下 → 斜上 → 斜下 …），
@@ -357,7 +360,8 @@ const state = {
   score: 0, lines: 0, level: 1,
   gameOver: false, paused: false,
   piece: null, next: null, bag: [],
-  dropTimer: 0, lockTimer: 0, spawnTimer: 0,
+  dropTimer: 0, lockTimer: 0, lockResets: 0, touchedDown: false, spawnTimer: 0,
+  fallLevel: 0,
   dasDir: 0, dasTimer: 0,
   lateralDir: 0, lateralNextUp: false,   // 同方向连按时竖向上下交替
   softButton: false, softTouch: false,
@@ -392,6 +396,26 @@ const curCells = () => cellsAt(state.piece, state.piece.q, state.piece.r);
 const fits = cells =>
   cells.every(([q, r]) => BOARD_SET.has(kk(q, r)) && !state.filled.has(kk(q, r)));
 const canFall = () => fits(cellsAt(state.piece, state.piece.q, state.piece.r + 1));
+
+// 六边形相邻列正好错开半格：跨一列时竖向不是 +半格就是 -半格。fallLevel 记录方块
+// 下落到达过的最低位置（halfLevel 的单位就是半格），横向跨列只允许在它上方半格
+// 以内，否则贴地/被挡时连按同一方向就能一遍遍走斜上，一路往上爬。基准只跟着落到
+// “新低”下移，所以正常下落、斜下跨列都不受限，被挡住的只有“凭空爬高”。
+const halfLevel = (q, r) => 2 * r + q;
+function resetFallLevel() {
+  const p = state.piece;
+  state.fallLevel = p ? halfLevel(p.q, p.r) : 0;
+}
+
+// 落到新低：基准下移，锁延迟和刷新额度重新算。只认“往前没到过”的高度，否则抬起
+// 后再落回同一位置就能把额度一直补满，方块可以在原地无限悬停。
+function reach(level) {
+  if (level <= state.fallLevel) return false;
+  state.fallLevel = level;
+  state.lockTimer = 0;
+  state.lockResets = 0;
+  return true;
+}
 const gravityMs = () => Math.max(GRAVITY_MIN, GRAVITY_BASE - (state.level - 1) * 90);
 
 function reset() {
@@ -400,12 +424,14 @@ function reset() {
   state.gameOver = false; state.paused = false;
   state.nameEntry = null; state.lastRank = null;
   state.bag = [];
-  state.dropTimer = 0; state.lockTimer = 0; state.spawnTimer = 0;
+  state.dropTimer = 0; state.lockTimer = 0; state.lockResets = 0;
+  state.touchedDown = false; state.spawnTimer = 0;
   state.dasDir = 0; state.dasTimer = 0;
   state.lateralDir = 0; state.lateralNextUp = false;
   state.softButton = false; state.softTouch = false;
   state.piece = spawn(drawName());
   state.next = drawName();
+  resetFallLevel();
   hideOverlay();
   updateIcons();
   if (!state.piece) finishGame();
@@ -418,14 +444,31 @@ function tryMove(dq, dr) {
   const p = state.piece;
   if (!p) return false;
   if (!fits(cellsAt(p, p.q + dq, p.r + dr))) return false;
+  const level = halfLevel(p.q + dq, p.r + dr);
+  const isDown = dq === DOWN[0] && dr === DOWN[1];
+  // 比下落到达过的最低位置高出半格以上: 这一步就是在凭空爬高, 挡掉
+  if (!isDown && level < state.fallLevel - 1) return false;
+  const rested = !canFall();
   p.q += dq; p.r += dr;
-  state.lockTimer = 0;
+  if (!reach(level) && !isDown) afterShift(rested);
+  if (!canFall()) state.touchedDown = true;
   if (dq !== 0) play('move');              // 只有左右跨列才响
   return true;
 }
 
+// 移动/旋转成功后处理锁延迟计时。只有贴地时的移动/旋转才刷新计时，而且总共只有
+// LOCK_RESET_MAX 次（落到新低时由 reach 补满）。悬空时既不清零也不暂停（见 update），
+// 否则在底部用斜上移动反复“抬起-落回”就能一直拖延落定。
+function afterShift(rested) {
+  if (rested && state.lockResets < LOCK_RESET_MAX) {
+    state.lockResets += 1;
+    state.lockTimer = 0;
+  }
+}
+
 // 跨一列：dir 为 -1 向左、+1 向右。同一方向连按时竖向交替：斜下 → 斜上 → 斜下…
-// 轮到的那一步被墙或方块挡住时，改走同方向的另一斜向。
+// 轮到的那一步被墙或方块挡住时，改走同方向的另一斜向。每一步都不能比下落到达过
+// 的位置高出半格以上（见 tryMove），所以被挡住时不会顺着斜上一路爬高。
 function moveLateral(dir) {
   const [down, up] = LATERAL[dir];
   const first = (state.lateralDir === dir && state.lateralNextUp) ? up : down;
@@ -445,13 +488,18 @@ function tryRotate(dir) {
   if (!p) return false;
   const rot = (p.rot + (dir > 0 ? 1 : -1) + 6) % 6;
   const rel = REL[p.name][rot];
+  const rested = !canFall();
   for (const [dq, dr] of KICKS) {
-    if (fits(rel.map(([cq, cr]) => [cq + p.q + dq, cr + p.r + dr]))) {
-      p.rot = rot; p.q += dq; p.r += dr;
-      state.lockTimer = 0;
-      play('rotate');
-      return true;
-    }
+    const q = p.q + dq, r = p.r + dr;
+    if (!fits(rel.map(([cq, cr]) => [cq + q, cr + r]))) continue;
+    // 踢墙也不许把方块抬到下落到达的位置之上半格以上, 否则连按旋转
+    // （抬一整行 → 反方向原地转 → 重力落回）就能一级级往上爬
+    if (halfLevel(q, r) < state.fallLevel - 1) continue;
+    p.rot = rot; p.q = q; p.r = r;
+    if (!reach(halfLevel(q, r))) afterShift(rested);
+    if (!canFall()) state.touchedDown = true;
+    play('rotate');
+    return true;
   }
   return false;
 }
@@ -520,10 +568,13 @@ function lock() {
 
   state.piece = spawn(state.next);
   state.next = drawName();
+  resetFallLevel();
   state.lateralDir = 0;
   state.lateralNextUp = false;
   state.dropTimer = 0;
   state.lockTimer = 0;
+  state.lockResets = 0;
+  state.touchedDown = false;
   state.spawnTimer = SPAWN_PAUSE;
   updateHud();
   drawPreview();
@@ -949,8 +1000,18 @@ function update(dt) {
       if (soft) state.score += 1;
     }
   } else {
+    state.touchedDown = true;
+  }
+
+  // 锁计时从方块第一次贴地起就持续累加（即使随后又被斜上移动抬起），只在真正
+  // 落定时清零——否则“抬起-落回”反复横跳就能无限拖延落定。
+  if (state.touchedDown) {
     state.lockTimer += dt;
-    if (state.lockTimer >= LOCK_DELAY) lock();
+    if (state.lockTimer >= LOCK_DELAY) {
+      // 到期就必须落定: 就算被旋转踢墙/斜上移动支在空中, 也直接落到落点
+      state.piece.r = landingAnchor();
+      lock();
+    }
   }
 }
 
@@ -987,7 +1048,8 @@ requestAnimationFrame(frame);
 // 自检 / 调试入口
 window.__hex = {
   state, reset, spawn, cellsAt, curCells, fits, tryMove, tryRotate, moveLateral, hardDrop,
-  lock, update, clearFullLines, drawName, drawBoard, drawPreview, resize, doAction,
+  lock, update, clearFullLines, drawName, drawBoard, drawPreview, resize, doAction, afterShift,
+  halfLevel, resetFallLevel, reach,
   BOARD_CELLS, BOARD_SET, ROWS, PIECES, REL, LATERAL, kk,
   has: (q, r) => state.filled.has(kk(q, r)),
 };

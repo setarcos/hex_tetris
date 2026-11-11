@@ -83,6 +83,7 @@ def test_lateral_alternates_vertical():
     g = H.Game(screen)
     g.filled.clear()
     g.piece["q"], g.piece["r"] = -2, 0          # 棋盘中间, 四周都通
+    g.reset_fall_level()
     p = g.piece
     assert g.fits(g.cur_cells())
     q0, r0 = p["q"], p["r"]
@@ -105,6 +106,7 @@ def test_lateral_falls_back_to_other_diagonal():
     g = H.Game(screen)
     g.filled.clear()
     g.piece = {"name": "I", "rot": 0, "q": -2, "r": 0}
+    g.reset_fall_level()
     p = g.piece
     assert g.fits(g.cur_cells())
     for c in g.cells_at(p, p["q"] - 1, p["r"] + 1):      # 占住左下目标
@@ -115,6 +117,30 @@ def test_lateral_falls_back_to_other_diagonal():
     assert (p["q"], p["r"]) == (-3, 0)                  # 改走了左上
     assert g.lateral_next_up is False                    # 下一次回到左下
     pygame.quit()
+
+
+def test_lateral_cannot_climb():
+    """贴地时连续按同一方向不能顺着斜上一路爬高: 相对下落基准最多偏半格。"""
+    pygame.init()
+    screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
+    g = H.Game(screen)
+    g.filled.clear()
+    for c in H.BOARD_CELLS:                     # 造一层平地板（q <= 1 才有 r >= 6）
+        if c[1] >= 6:
+            g.filled[c] = (1, 2, 3)
+    g.piece = {"name": "O", "rot": 0, "q": 0, "r": 0}
+    while g.try_move(H.DOWN):
+        pass
+    g.reset_fall_level()
+    key0 = g.half_level(g.piece["q"], g.piece["r"])
+    assert not g.can_fall()                     # 已经贴地
+
+    moved = 0
+    for _ in range(8):
+        if g.try_lateral(-1):
+            moved += 1
+        assert g.half_level(g.piece["q"], g.piece["r"]) >= key0 - 1
+    assert moved == 1, moved                    # 只能横移一列，不能接着往上爬
 
 
 def test_rotation_is_rigid():
@@ -260,6 +286,66 @@ def test_pause_after_lock():
     pygame.quit()
 
 
+def test_lock_delay_cannot_be_stalled_by_keys():
+    """落底后连按移动/旋转不能拖延落定（以前可以永远不落）。"""
+    pygame.init()
+    screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
+    keysets = ((pygame.K_UP,), (pygame.K_LEFT,),
+               (pygame.K_LEFT, pygame.K_UP), (pygame.K_RIGHT, pygame.K_UP))
+    for name in H.PIECES:
+        for keys in keysets:
+            g = H.Game(screen)
+            g.spawn_timer = 0
+            g.filled.clear()
+            g.piece = g.spawn(name)
+            assert g.piece is not None
+            g.piece["q"], g.piece["r"] = g.landing_anchor()
+            g.reset_fall_level()
+            piece = g.piece
+            elapsed = 0
+            while g.piece is piece and elapsed < 5000:
+                for key in keys:
+                    g.on_key(key)
+                g.update(16)
+                elapsed += 16
+            assert g.piece is not piece, f"{name} 连按 {keys} 仍在无限拖延落定"
+            assert elapsed <= 3 * H.LOCK_DELAY, (name, keys, elapsed)
+    pygame.quit()
+
+
+def test_rotation_cannot_climb():
+    """旋转踢墙也不能把方块抬到下落到达的位置之上（否则连按旋转能一级级往上爬）。"""
+    pygame.init()
+    screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
+    rejected = 0
+    for name in H.PIECES:
+        for rot in range(6):
+            g = H.Game(screen)
+            g.spawn_timer = 0
+            g.filled.clear()
+            p = g.spawn(name)
+            p["rot"] = rot
+            p["q"], p["r"] = g.landing_anchor()
+            if not g.fits(g.cur_cells()):
+                continue
+            g.piece = p
+            g.reset_fall_level()
+            fall = g.fall_level
+            for direction in (1, -1):
+                before = (p["q"], p["r"], p["rot"])
+                if g.try_rotate(direction):
+                    assert g.half_level(p["q"], p["r"]) >= fall - 1, (name, rot, direction)
+                else:
+                    assert (p["q"], p["r"], p["rot"]) == before, (name, rot, direction)
+                    nrot = (rot + direction) % 6
+                    rel = H.piece_rel(name, nrot)
+                    if any(g.fits([(cq + p["q"] + dq, cr + p["r"] + dr) for cq, cr in rel])
+                           for dq, dr in H.KICKS):
+                        rejected += 1          # 本来能靠抬一整行转过去, 被限制挡下
+    assert rejected, "棋盘底边应有只能靠整行上抬才转得动的姿态（现在被拒绝）"
+    pygame.quit()
+
+
 def test_spawn_and_lock():
     pygame.init()
     screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
@@ -297,6 +383,8 @@ if __name__ == "__main__":
     test_lateral_steps_are_diagonal()
     test_lateral_alternates_vertical()
     test_lateral_falls_back_to_other_diagonal()
+    test_lateral_cannot_climb()
+    test_rotation_cannot_climb()
     test_rotation_is_rigid()
     test_rotation_pivots_near_centroid()
     test_rows_are_half_diagonals()
@@ -307,6 +395,7 @@ if __name__ == "__main__":
     test_short_rows_do_not_clear()
     test_spawn_fixed_and_death()
     test_pause_after_lock()
+    test_lock_delay_cannot_be_stalled_by_keys()
     test_spawn_and_lock()
     make_shot("/tmp/hex_shot.png")
     print("ALL LOGIC TESTS PASSED")

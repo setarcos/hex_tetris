@@ -278,6 +278,9 @@ KICKS = [(0, 0), (-1, 1), (1, 0), (0, 1), (0, -1), (-1, 0), (1, -1)]
 GRAVITY_BASE = 1040
 GRAVITY_MIN = 180
 LOCK_DELAY = 840
+# 贴地后移动/旋转可以重置锁延迟, 但最多这么多次。没有上限时在底部原地连按
+# 就能一直刷新计时, 方块永远不落定。额度只在方块落到新低时补满。
+LOCK_RESET_MAX = 15
 DAS = 340
 DAS_REPEAT = 110
 SOFT_DROP_MS = 55
@@ -663,6 +666,8 @@ class Game:
         self.bag = []
         self.drop_timer = 0
         self.lock_timer = 0
+        self.lock_resets = 0
+        self.touched_down = False
         self.spawn_timer = 0
         self.das_dir = 0
         self.das_timer = 0
@@ -670,6 +675,7 @@ class Game:
         self.lateral_next_up = False  # 同方向下一步是否先走斜上
         self.piece = self.spawn(self.draw_name())
         self.next_name = self.draw_name()
+        self.reset_fall_level()
         if self.piece is None:
             self.finish_game()
 
@@ -705,26 +711,63 @@ class Game:
     def fits(self, cells):
         return all(c in BOARD_SET and c not in self.filled for c in cells)
 
+    # -- 水平移动的高度基准 -------------------------------------------------
+    # 六边形相邻列正好错开半格: 跨一列时竖向不是 +半格就是 -半格。fall_level
+    # 记录方块下落到达过的最低位置（单位半格），横向跨列只允许在它上方半格以内，
+    # 否则贴地 / 被挡时连按同一方向就能一遍遍走斜上，一路往上爬。基准只跟着下降
+    # 走（落到往前没到过的新低），所以正常下落、斜下跨列都不受限，被挡住的只有
+    # “凭空爬高”。
+    def half_level(self, q, r):
+        """竖向位置, 单位是半格: 2r + q（q 差 1 正好差半格）。"""
+        return 2 * r + q
+
+    def reset_fall_level(self):
+        """新方块出生时把下落基准定在它的高度上。"""
+        p = self.piece
+        self.fall_level = self.half_level(p["q"], p["r"]) if p else 0
+
+    def reach(self, level):
+        """落到新低: 基准下移, 锁延迟和刷新额度重新算。
+
+        只认“往前没到过”的高度, 否则抬起后再落回同一位置就能把额度一直补满,
+        方块可以在原地无限悬停。
+        """
+        if level <= self.fall_level:
+            return False
+        self.fall_level = level
+        self.lock_timer = 0
+        self.lock_resets = 0
+        return True
+
     # -- 操作 ---------------------------------------------------------------
     def try_move(self, delta):
         if self.piece is None:
             return False
         dq, dr = delta
-        if self.fits(self.cells_at(self.piece, self.piece["q"] + dq, self.piece["r"] + dr)):
-            self.piece["q"] += dq
-            self.piece["r"] += dr
-            self.lock_timer = 0
-            if delta != DOWN:
-                self.sounds.play("move")
-            return True
-        return False
+        q, r = self.piece["q"] + dq, self.piece["r"] + dr
+        if not self.fits(self.cells_at(self.piece, q, r)):
+            return False
+        level = self.half_level(q, r)
+        # 比下落到达过的最低位置高出半格以上: 这一步就是在凭空爬高, 挡掉
+        if delta != DOWN and level < self.fall_level - 1:
+            return False
+        rested = not self.can_fall()
+        self.piece["q"], self.piece["r"] = q, r
+        if not self.reach(level) and delta != DOWN:
+            self.after_shift(rested)
+        if not self.can_fall():
+            self.touched_down = True
+        if delta != DOWN:
+            self.sounds.play("move")
+        return True
 
     def try_lateral(self, direction):
         """跨一列：direction 为 -1 向左、+1 向右。
 
         同一方向连按时竖向交替：先斜下、再斜上、再斜下…… 连按左就是横着往左走、
         不会一直往下沉。轮到的那一步被墙或方块挡住时，改走同方向的另一斜向，
-        只要相邻列有一侧过得去就能走。
+        只要相邻列有一侧过得去就能走。每一步都不能比下落到达过的位置高出半格
+        以上（见 try_move），所以被挡住时不会顺着斜上一路爬高。
         """
         down, up = LATERAL_STEPS[direction]
         first = up if (self.lateral_dir == direction and self.lateral_next_up) else down
@@ -742,16 +785,36 @@ class Game:
         p = self.piece
         new_rot = (p["rot"] + (1 if direction > 0 else -1)) % 6
         rel = piece_rel(p["name"], new_rot)
+        rested = not self.can_fall()
         for dq, dr in KICKS:
-            cells = [(cq + p["q"] + dq, cr + p["r"] + dr) for cq, cr in rel]
-            if self.fits(cells):
-                p["rot"] = new_rot
-                p["q"] += dq
-                p["r"] += dr
-                self.lock_timer = 0
-                self.sounds.play("rotate")
-                return True
+            q, r = p["q"] + dq, p["r"] + dr
+            cells = [(cq + q, cr + r) for cq, cr in rel]
+            if not self.fits(cells):
+                continue
+            # 踢墙也不许把方块抬到下落到达的位置之上半格以上, 否则连按旋转
+            # （抬一整行 → 反方向原地转 → 重力落回）就能一级级往上爬
+            if self.half_level(q, r) < self.fall_level - 1:
+                continue
+            p["rot"] = new_rot
+            p["q"], p["r"] = q, r
+            if not self.reach(self.half_level(q, r)):
+                self.after_shift(rested)
+            if not self.can_fall():
+                self.touched_down = True
+            self.sounds.play("rotate")
+            return True
         return False
+
+    def after_shift(self, rested):
+        """移动/旋转成功后处理锁延迟计时。
+
+        只有贴地时的移动/旋转才刷新计时，而且总共只有 LOCK_RESET_MAX 次（落到
+        新低时由 reach 补满）。悬空时既不清零也不暂停（见 update），否则在底部
+        用斜上移动反复“抬起-落回”就能一直拖延落定。
+        """
+        if rested and self.lock_resets < LOCK_RESET_MAX:
+            self.lock_resets += 1
+            self.lock_timer = 0
 
     def can_fall(self):
         dq, dr = DOWN
@@ -799,10 +862,13 @@ class Game:
 
         self.piece = self.spawn(self.next_name)
         self.next_name = self.draw_name()
+        self.reset_fall_level()
         self.lateral_dir = 0
         self.lateral_next_up = False
         self.drop_timer = 0
         self.lock_timer = 0
+        self.lock_resets = 0
+        self.touched_down = False
         self.spawn_timer = SPAWN_PAUSE
         if self.piece is None:
             self.finish_game()
@@ -904,8 +970,16 @@ class Game:
                 if soft:
                     self.score += 1
         else:
+            self.touched_down = True
+
+        # 锁计时从方块第一次贴地起就持续累加（即使随后又被斜上移动抬起），
+        # 只在真正落定时清零——否则“抬起-落回”反复横跳就能无限拖延落定。
+        if self.touched_down:
             self.lock_timer += dt
             if self.lock_timer >= LOCK_DELAY:
+                # 到期就必须落定: 就算被旋转踢墙/斜上移动支在空中, 也直接落到落点
+                q, r = self.landing_anchor()
+                self.piece["q"], self.piece["r"] = q, r
                 self.lock()
 
     # -- 绘制 ---------------------------------------------------------------

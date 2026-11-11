@@ -61,32 +61,40 @@ LATERAL_MOVES = {
 }
 
 
-def transitions(game, name, q, r, rot):
-    """与 Game.try_lateral / try_rotate 一致的合法走法。"""
+def transitions(game, name, q, r, rot, anchor):
+    """与 Game.try_lateral / try_rotate 一致的合法走法。
+
+    anchor 是下落基准高度（半格为单位）: 横向跨列和旋转踢墙都不能把方块抬到
+    它上方半格以上，下降时基准跟着下移，所以状态里必须带上它。
+    """
     out = []
     for action, (dq, dr) in LATERAL_MOVES.items():
-        if fits_state(game, name, q + dq, r + dr, rot):
-            out.append(((q + dq, r + dr, rot), action))
+        nq, nr = q + dq, r + dr
+        level = 2 * nr + nq
+        if level >= anchor - 1 and fits_state(game, name, nq, nr, rot):
+            out.append(((nq, nr, rot, max(anchor, level)), action))
     if fits_state(game, name, q, r + 1, rot):          # 下落
-        out.append(((q, r + 1, rot), "D"))
+        out.append(((q, r + 1, rot, max(anchor, 2 * (r + 1) + q)), "D"))
     for step, move in ((1, "CW"), (-1, "CCW")):
         nrot = (rot + step) % 6
         for dq, dr in ht.KICKS:
-            if fits_state(game, name, q + dq, r + dr, nrot):
-                out.append(((q + dq, r + dr, nrot), move))
+            nq, nr = q + dq, r + dr
+            level = 2 * nr + nq
+            if level >= anchor - 1 and fits_state(game, name, nq, nr, nrot):
+                out.append(((nq, nr, nrot, max(anchor, level)), move))
                 break
     return out
 
 
 def reachable(game, name, q0, r0, rot0):
     """BFS 返回 {状态: 从起点到该状态的动作序列}。"""
-    start = (q0, r0, rot0)
+    start = (q0, r0, rot0, game.fall_level)
     paths = {start: ()}
     todo = deque([start])
     while todo and len(paths) < MAX_STATES:
-        q, r, rot = todo.popleft()
-        path = paths[(q, r, rot)]
-        for state, move in transitions(game, name, q, r, rot):
+        q, r, rot, anchor = todo.popleft()
+        path = paths[(q, r, rot, anchor)]
+        for state, move in transitions(game, name, q, r, rot, anchor):
             if state not in paths:
                 paths[state] = path + (move,)
                 todo.append(state)
@@ -154,7 +162,7 @@ def best_move(game):
 
     best_score, best_path = None, ()
     seen = set()
-    for (q, r, rot), path in paths.items():
+    for (q, r, rot, _anchor), path in paths.items():
         land_r = drop_to(game, name, q, r, rot)
         key = (q, land_r, rot)
         if key in seen:
