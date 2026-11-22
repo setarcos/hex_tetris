@@ -194,6 +194,9 @@ def play_headless(pieces, seed=None):
     game = ht.Game(pygame.Surface((8, 8)))
     played = 0
     while played < pieces and not game.game_over:
+        if game.clear_anim is not None:      # 开了消行动画: 跳过动画直接收尾
+            game.finish_clear_anim()
+            continue
         if game.piece is None:
             break
         path, _ = best_move(game)
@@ -250,7 +253,7 @@ def play_window(fast=False, seed=None):
                 elif event.key == pygame.K_p and not game.game_over:
                     game.paused = not game.paused
 
-        if not game.game_over and not game.paused:
+        if not game.game_over and not game.paused and game.clear_anim is None:
             wait -= dt
             if wait <= 0:
                 if not plan:

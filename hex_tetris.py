@@ -74,8 +74,11 @@ STRINGS = {
             "空格       硬降",
             "Alt+Enter  全屏切换",
             "M          音效开关",
+            "C          消行动画：{anim}",
             "P 暂停   R 重开   Esc 退出",
         ],
+        "anim_on": "开",
+        "anim_off": "关",
         "no_records": "暂无记录",
         "paused": "已暂停",
         "resume": "按 P 继续",
@@ -103,8 +106,11 @@ STRINGS = {
             "Space      Hard drop",
             "Alt+Enter  Fullscreen",
             "M          Mute",
+            "C          Clear anim: {anim}",
             "P Pause  R Restart  Esc Quit",
         ],
+        "anim_on": "ON",
+        "anim_off": "OFF",
         "no_records": "No records yet",
         "paused": "PAUSED",
         "resume": "Press P to resume",
@@ -287,6 +293,12 @@ SOFT_DROP_MS = 55
 # 落定后的短暂停顿：新方块在这段时间内不响应按键、不下落，
 # 避免按住下键 / 连按空格时一下连掉两块。
 SPAWN_PAUSE = 150
+# 消行动画：被消的行先高亮闪一下，上方方块再平滑落到底。
+# 游戏里按 C 随时开关；HEX_TETRIS_CLEAR_ANIM=1 可让动画默认打开。
+CLEAR_ANIM_ENABLED = os.environ.get("HEX_TETRIS_CLEAR_ANIM", "0").lower() not in (
+    "0", "off", "false", "no")
+CLEAR_FLASH_MS = 150    # 高亮闪烁一次的时长
+CLEAR_FALL_MS = 240     # 平滑下落的时长
 
 # 布局
 MARGIN = 24
@@ -537,6 +549,13 @@ def darken(color, f):
     return lighten(color, f)
 
 
+def blend(a, b, t):
+    """两个颜色按 t (0..1) 线性混合。"""
+    return clamp((a[0] + (b[0] - a[0]) * t,
+                  a[1] + (b[1] - a[1]) * t,
+                  a[2] + (b[2] - a[2]) * t))
+
+
 def draw_hex(surf, cx, cy, s, fill=None, outline=None, width=2):
     pts = hex_points(cx, cy, s)
     if fill:
@@ -551,15 +570,20 @@ def draw_cell(surf, cx, cy, s, color):
     pygame.draw.polygon(surf, darken(color, 0.45), hex_points(cx, cy, s), 2)
 
 
-def clear_full_lines(filled):
-    """原地消除所有被填满的整行（8 格）, 上方方块整体下落, 返回消除的行数。
+def full_rows(filled):
+    """当前被填满的整行（正好 8 格）。"""
+    return [row for row in ROWS if len(row) == 8 and all(c in filled for c in row)]
 
-    靠近棋盘顶端顶点、不足 8 格的斜线不参与消除。
+
+def plan_clear(filled, full):
+    """算出一组被消行的结果，不改动 filled。
+
+    返回 (removed, settled, falls):
+        removed  被消掉的格子集合
+        settled  消行之后的棋盘 {cell: color}
+        falls    [((q, r), (q, r + 下落格数), color)]，供动画使用
+    同一列中位于被消格子上方的方块, 下落格数 = 该列中被消去的格子数。
     """
-    full = [row for row in ROWS if len(row) == 8 and all(c in filled for c in row)]
-    if not full:
-        return 0
-
     removed = set()
     for row in full:
         removed.update(row)
@@ -567,14 +591,27 @@ def clear_full_lines(filled):
     removed_by_col = {}
     for q, r in removed:
         removed_by_col.setdefault(q, []).append(r)
-    for c in removed:
-        filled.pop(c, None)
 
-    # 同一列中位于被消格子上方的方块, 下落格数 = 该列中被消去的格子数
-    settled = {}
+    settled, falls = {}, []
     for (q, r), color in filled.items():
+        if (q, r) in removed:
+            continue
         down = sum(1 for rr in removed_by_col.get(q, ()) if rr > r)
         settled[(q, r + down)] = color
+        if down:
+            falls.append(((q, r), (q, r + down), color))
+    return removed, settled, falls
+
+
+def clear_full_lines(filled):
+    """原地消除所有被填满的整行（8 格）, 上方方块整体下落, 返回消除的行数。
+
+    靠近棋盘顶端顶点、不足 8 格的斜线不参与消除。
+    """
+    full = full_rows(filled)
+    if not full:
+        return 0
+    _, settled, _ = plan_clear(filled, full)
     filled.clear()
     filled.update(settled)
     return len(full)
@@ -649,6 +686,7 @@ class Game:
         self.font_cache = {}
         self.highscores = load_highscores()
         self.sounds = SoundBank()
+        self.animate_clears = CLEAR_ANIM_ENABLED
         self.name_entry = None
         self.last_rank = None
         self.reset()
@@ -656,6 +694,7 @@ class Game:
     # -- 状态 ---------------------------------------------------------------
     def reset(self):
         self.filled = {}
+        self.clear_anim = None
         self.score = 0
         self.lines = 0
         self.level = 1
@@ -844,8 +883,10 @@ class Game:
     def lock(self):
         for c in self.cur_cells():
             self.filled[c] = COLORS[self.piece["name"]]
+        self.piece = None               # 消行动画期间没有活动方块
 
-        n = clear_full_lines(self.filled)
+        full = full_rows(self.filled)
+        n = len(full)
         leveled = False
         if n:
             score_table = {1: 100, 2: 400, 3: 900}
@@ -855,11 +896,46 @@ class Game:
             leveled = new_level > self.level
             self.level = new_level
             self.sounds.play("clear3" if n >= 3 else f"clear{n}")
+            if self.animate_clears:
+                self.start_clear_anim(full)
+            else:
+                _, settled, _ = plan_clear(self.filled, full)
+                self.filled.clear()
+                self.filled.update(settled)
         else:
             self.sounds.play("lock")
         if leveled:
             self.sounds.play("level")
 
+        if self.clear_anim is None:
+            self.spawn_next()
+
+    def start_clear_anim(self, full):
+        """开始消行动画: 被消的行先高亮闪一下, 上方方块再平滑落下。
+
+        动画期间棋盘保持消行前的样子, 结束时才换成 plan_clear 算好的新棋盘。
+        """
+        removed, settled, falls = plan_clear(self.filled, full)
+        self.clear_anim = {"removed": removed, "settled": settled,
+                           "falls": falls, "t": 0}
+
+    def finish_clear_anim(self):
+        anim, self.clear_anim = self.clear_anim, None
+        self.filled.clear()
+        self.filled.update(anim["settled"])
+        self.spawn_next()
+
+    def anim_phase(self):
+        """消行动画当前阶段: (是否闪烁阶段, 阶段内进度 0..1)。"""
+        if self.clear_anim is None:
+            return False, 0.0
+        t = self.clear_anim["t"]
+        if t < CLEAR_FLASH_MS:
+            return True, t / CLEAR_FLASH_MS
+        return False, min(1.0, (t - CLEAR_FLASH_MS) / CLEAR_FALL_MS)
+
+    def spawn_next(self):
+        """落定（或消行动画结束）后生成下一个方块。"""
         self.piece = self.spawn(self.next_name)
         self.next_name = self.draw_name()
         self.reset_fall_level()
@@ -916,6 +992,9 @@ class Game:
         if key == pygame.K_m:
             self.sounds.toggle()
             return True
+        if key == pygame.K_c:
+            self.animate_clears = not self.animate_clears
+            return True
         if key == pygame.K_r:
             self.reset()
             return True
@@ -927,7 +1006,7 @@ class Game:
             return True
         if self.paused:
             return True
-        if self.spawn_timer > 0:
+        if self.spawn_timer > 0 or self.clear_anim is not None:
             return True
 
         if key in (pygame.K_LEFT, pygame.K_a):
@@ -946,6 +1025,12 @@ class Game:
 
     def update(self, dt):
         if self.game_over or self.paused:
+            return
+
+        if self.clear_anim is not None:
+            self.clear_anim["t"] += dt
+            if self.clear_anim["t"] >= CLEAR_FLASH_MS + CLEAR_FALL_MS:
+                self.finish_clear_anim()
             return
 
         if self.spawn_timer > 0:
@@ -1004,15 +1089,33 @@ class Game:
 
     def draw_board(self):
         r = max(2, int(S * 0.1))
+        anim = self.clear_anim
+        flashing, phase = self.anim_phase()
+        falling = {src for src, _, _ in anim["falls"]} if anim and not flashing else ()
         for q, cell_r in BOARD_CELLS:
             cx, cy = cell_center(q, cell_r)
             color = self.filled.get((q, cell_r))
             if color is None:
                 draw_hex(self.screen, cx, cy, S, None, EMPTY_LINE, r)
+            elif anim and (q, cell_r) in anim["removed"]:
+                if flashing:                     # 要被消的格子先亮一下
+                    glow = blend(color, (255, 255, 255),
+                                 0.85 * math.sin(math.pi * phase))
+                    draw_cell(self.screen, cx, cy, S, glow)
+            elif (q, cell_r) in falling:
+                pass                             # 下落中的方块按插值位置画
             else:
                 draw_cell(self.screen, cx, cy, S, color)
 
-        if self.game_over:
+        if anim and not flashing:
+            t = phase * phase * (3 - 2 * phase)   # 平滑起步、缓入落地
+            for (q0, r0), (q1, r1), color in anim["falls"]:
+                x0, y0 = cell_center(q0, r0)
+                x1, y1 = cell_center(q1, r1)
+                draw_cell(self.screen, x0 + (x1 - x0) * t,
+                          y0 + (y1 - y0) * t, S, color)
+
+        if self.game_over or self.piece is None:
             return
 
         color = COLORS[self.piece["name"]]
@@ -1070,7 +1173,8 @@ class Game:
                       (r.right - pad, y - int(4 * k)), right=True)
             y += step
 
-        lines = TEXT["help"]
+        lines = [line.replace("{anim}", TEXT["anim_on"] if self.animate_clears
+                              else TEXT["anim_off"]) for line in TEXT["help"]]
         help_top = r.bottom - int(24 * k) - row * len(lines)
 
         # Top 5（窗口太矮时自动少显示几行）

@@ -359,6 +359,60 @@ def test_spawn_and_lock():
     pygame.quit()
 
 
+def test_clear_animation():
+    """消行动画：先闪烁、再平滑下落，结束后才换成消行后的棋盘。"""
+    pygame.init()
+    screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
+
+    def setup(animate):
+        g = H.Game(screen)
+        g.animate_clears = animate
+        g.spawn_timer = 0
+        g.filled.clear()
+        for q in range(-H.Q_MAX, 0):                 # 左下底行只差 q = 0 一格
+            g.filled[(q, H.R_MAX)] = H.COLORS["T"]
+        g.filled[(0, H.R_MAX - 1)] = H.COLORS["O"]  # 消行后要下落 1 格
+        g.piece = {"name": "I", "rot": 0, "q": 0, "r": H.R_MAX}
+        g.lock()
+        return g
+
+    expected = {(0, H.R_MAX): H.COLORS["O"], (1, H.R_MAX): H.COLORS["I"],
+                (2, H.R_MAX): H.COLORS["I"], (3, H.R_MAX): H.COLORS["I"]}
+
+    instant = setup(False)                           # 关掉动画: 立即消行
+    assert instant.clear_anim is None
+    expected = dict(instant.filled)
+    assert instant.piece is not None
+    # 底行消掉、上方那格落到 r = R_MAX
+    assert all((q, H.R_MAX) not in expected for q in range(-H.Q_MAX, 0))
+    assert expected[(0, H.R_MAX)] == H.COLORS["O"]
+
+    g = setup(True)                                  # 开动画: 棋盘先保持原样
+    assert g.clear_anim is not None and g.piece is None
+    assert g.filled != expected and (0, H.R_MAX) in g.filled
+    assert (g.lines, g.score) == (instant.lines, instant.score)
+    assert g.anim_phase() == (True, 0.0)
+
+    assert g.on_key(pygame.K_SPACE) and g.clear_anim is not None   # 动画期间不响应
+
+    g.update(H.CLEAR_FLASH_MS // 2)
+    flashing, phase = g.anim_phase()
+    assert flashing and 0 < phase < 1 and g.filled != expected
+    g.draw()                                         # 闪烁阶段能正常画
+
+    g.update(H.CLEAR_FLASH_MS)                       # 进入下落阶段
+    flashing, phase = g.anim_phase()
+    assert not flashing and 0 < phase < 1
+    assert g.clear_anim["falls"] == [((0, H.R_MAX - 1), (0, H.R_MAX), H.COLORS["O"])]
+    g.draw()
+
+    g.update(H.CLEAR_FALL_MS)                        # 动画结束: 换成消行后的棋盘
+    assert g.clear_anim is None
+    assert g.filled == expected
+    assert g.piece is not None and g.spawn_timer == H.SPAWN_PAUSE
+    pygame.quit()
+
+
 def make_shot(path):
     pygame.init()
     screen = pygame.display.set_mode((H.WIN_W, H.WIN_H))
@@ -397,5 +451,6 @@ if __name__ == "__main__":
     test_pause_after_lock()
     test_lock_delay_cannot_be_stalled_by_keys()
     test_spawn_and_lock()
+    test_clear_animation()
     make_shot("/tmp/hex_shot.png")
     print("ALL LOGIC TESTS PASSED")

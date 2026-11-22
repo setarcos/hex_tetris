@@ -52,6 +52,7 @@ A row is a diagonal parallel to a bottom edge (lower-left / lower-right), judged
 | `Space` | hard drop |
 | `Alt`+`Enter` | toggle fullscreen / windowed |
 | `M` | toggle sound effects |
+| `C` | toggle the line-clear animation (off by default) |
 | `P` | pause / resume |
 | `R` | restart |
 | `Esc` | quit |
@@ -70,6 +71,13 @@ Move, rotate, lock, line clear, level up, pause and game over all have sound eff
 **synthesized in code** (no audio files are loaded), so the game still ships as a single script.
 Press `M` to mute/unmute. If no audio device is available the game runs silently; set
 `HEX_TETRIS_SOUND=0` to turn sound off from the start.
+
+## Line-clear animation
+
+The clear is instant by default. Press `C` to animate it: the cleared rows **flash once** and the
+blocks above then **slide down smoothly** (input is ignored while it plays). Set
+`HEX_TETRIS_CLEAR_ANIM=1` to have the animation on from the start. It is cosmetic only: score,
+lines and level are settled the moment the piece locks.
 
 ## Window
 
