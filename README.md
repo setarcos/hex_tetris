@@ -31,6 +31,8 @@ A row is a diagonal parallel to a bottom edge (lower-left / lower-right), judged
 - Since each row covers only one half, a check only looks at the left 8 or right 8 columns; rows near the vertices are naturally shorter (at most 8),
   and such **rows with fewer than 8 cells never clear**, even when completely filled.
 - **After a clear**, blocks above the cleared cells **fall down** within each vertical column by exactly the number of cells removed from that column (gaps at the top stay).
+- If the fall **completes another row, that row clears right away** (chains are allowed): columns fall by different amounts, so a
+  clear can line up new rows — they must not wait for the next piece to lock.
 
 ## Movement / falling
 
@@ -117,12 +119,16 @@ open the file directly, or serve it:
 | drag down and hold on board | soft drop |
 | flick down on board | hard drop |
 | tap on board | rotate CW |
-| `🔊` / `⏸` in the top bar | sound toggle / pause (pause screen shows TOP 5 and help) |
+| `✦` / `🔊` / `⏸` in the top bar | clear-animation toggle / sound toggle / pause (pause screen shows TOP 5 and help) |
 
 Portrait puts the board on top and the buttons under it (respecting the safe area); landscape puts the
 board on the left and the panel plus buttons on the right. The board always scales to fit and is never
-clipped. Desktop keyboard controls still work (arrows / WASD / Z / Space / P / R / M).
+clipped. Desktop keyboard controls still work (arrows / WASD / Z / Space / P / R / M / C).
 Scores live in `localStorage`; sound is synthesized with WebAudio.
+
+The clear animation (press `C` or `✦` in the top bar) matches the Python build: cleared cells flash
+once and the blocks above then slide into place. It is off by default and remembered in
+`localStorage`; rows completed by that fall clear immediately, exactly as in the Python version.
 
 ## Self-checks
 

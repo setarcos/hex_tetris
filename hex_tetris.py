@@ -14,7 +14,8 @@
           左半 (q = -7..0): r = 常数
           右半 (q =  0..7): s = -q-r = 常数
       只有长度正好 8 格的整行填满才消除; 靠近顶点、不足 8 格的斜线不消除。
-      消行后同一列中上方的方块整体下落 (下落格数 = 该列中被消去的格子数)。
+      消行后同一列中上方的方块整体下落 (下落格数 = 该列中被消去的格子数)；
+      下落之后又凑满的行会立刻接着消（可以连消好几轮）。
       竖直列不消。
 
 移动/下落:
@@ -603,18 +604,52 @@ def plan_clear(filled, full):
     return removed, settled, falls
 
 
-def clear_full_lines(filled):
-    """原地消除所有被填满的整行（8 格）, 上方方块整体下落, 返回消除的行数。
+def settle_clear(filled):
+    """反复“消行 + 下落”直到再没有满行。
 
-    靠近棋盘顶端顶点、不足 8 格的斜线不参与消除。
+    消行后同一列下落的格数可以不同, 可能又凑出一条满行 —— 必须当场接着消,
+    否则会出现“右边一条早就填满的斜线, 等到下一块落定时才突然消掉”, 看上去
+    就像在别处落子却消了这边的行。
+
+    返回 (removed, settled, falls, n):
+        removed  最终被消掉的格子（原始坐标）
+        settled  最终棋盘 {cell: color}
+        falls    [(原格, 最终格, color)]，需要下落的方块, 供动画使用
+        n        一共消掉的行数
     """
     full = full_rows(filled)
     if not full:
+        return set(), dict(filled), [], 0
+
+    # 值里带上原始坐标, 连消几轮后也能知道哪个格子最后落在哪里
+    board = {cell: (cell, color) for cell, color in filled.items()}
+    n = 0
+    while full:
+        n += len(full)
+        _, board, _ = plan_clear(board, full)
+        full = full_rows(board)
+
+    settled, falls, alive = {}, [], set()
+    for cell, (origin, color) in board.items():
+        settled[cell] = color
+        alive.add(origin)
+        if cell != origin:
+            falls.append((origin, cell, color))
+    return set(filled) - alive, settled, falls, n
+
+
+def clear_full_lines(filled):
+    """原地反复消除所有被填满的整行（8 格）, 返回消除的行数。
+
+    下落之后又凑满的行会接着消（可以一次消好几轮）。
+    靠近棋盘顶端顶点、不足 8 格的斜线不参与消除。
+    """
+    _, settled, _, n = settle_clear(filled)
+    if not n:
         return 0
-    _, settled, _ = plan_clear(filled, full)
     filled.clear()
     filled.update(settled)
-    return len(full)
+    return n
 
 
 def load_highscores():
@@ -885,8 +920,7 @@ class Game:
             self.filled[c] = COLORS[self.piece["name"]]
         self.piece = None               # 消行动画期间没有活动方块
 
-        full = full_rows(self.filled)
-        n = len(full)
+        removed, settled, falls, n = settle_clear(self.filled)
         leveled = False
         if n:
             score_table = {1: 100, 2: 400, 3: 900}
@@ -897,9 +931,8 @@ class Game:
             self.level = new_level
             self.sounds.play("clear3" if n >= 3 else f"clear{n}")
             if self.animate_clears:
-                self.start_clear_anim(full)
+                self.start_clear_anim(removed, settled, falls)
             else:
-                _, settled, _ = plan_clear(self.filled, full)
                 self.filled.clear()
                 self.filled.update(settled)
         else:
@@ -910,12 +943,11 @@ class Game:
         if self.clear_anim is None:
             self.spawn_next()
 
-    def start_clear_anim(self, full):
-        """开始消行动画: 被消的行先高亮闪一下, 上方方块再平滑落下。
+    def start_clear_anim(self, removed, settled, falls):
+        """开始消行动画: 要消的格子先高亮闪一下, 上方方块再平滑落到最终位置。
 
-        动画期间棋盘保持消行前的样子, 结束时才换成 plan_clear 算好的新棋盘。
+        动画期间棋盘保持消行前的样子, 结束时才换成算好的新棋盘。
         """
-        removed, settled, falls = plan_clear(self.filled, full)
         self.clear_anim = {"removed": removed, "settled": settled,
                            "falls": falls, "t": 0}
 

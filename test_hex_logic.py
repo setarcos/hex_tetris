@@ -359,6 +359,39 @@ def test_spawn_and_lock():
     pygame.quit()
 
 
+def test_shared_corner_cell_counts_once():
+    """左下边与右下边共享 (0, R_MAX)：同时消掉两条时中间列只下落 1 格。"""
+    filled = {}
+    for q in range(-H.Q_MAX, 1):
+        filled[(q, H.R_MAX)] = (1, 2, 3)
+    for q in range(0, H.Q_MAX + 1):
+        filled[(q, H.R_MAX - q)] = (1, 2, 3)
+    filled[(0, H.R_MAX - 1)] = (4, 5, 6)        # 中间列上方一格
+    assert len(H.full_rows(filled)) == 2
+    assert H.clear_full_lines(filled) == 2
+    assert filled == {(0, H.R_MAX): (4, 5, 6)}   # 共享格不能被算成两格
+
+
+def test_clear_chains_after_fall():
+    """消行下落后又凑满的行要当场接着消，不能留到下一块落定。"""
+    # 右侧斜线 s=4 只差中间列 (0,-4)；左侧斜线 r=-3 填满；(0,-5) 有块，
+    # 消掉左侧行后它会落到 (0,-4)，恰好补齐右侧斜线。
+    right = [(q, -4 - q) for q in range(0, H.Q_MAX + 1)]
+    assert right in H.ROWS and len(right) == 8
+    filled = {c: (1, 2, 3) for c in right if c != (0, -4)}
+    for q in range(-H.Q_MAX, 1):
+        filled[(q, -3)] = (4, 5, 6)
+    filled[(0, -5)] = (7, 8, 9)
+    assert [sorted(r) for r in H.full_rows(filled)] == [sorted((q, -3) for q in range(-H.Q_MAX, 1))]
+
+    removed, settled, falls, n = H.settle_clear(filled)
+    assert n == 2                      # 左行 + 下落补齐的右行
+    assert settled == {} and falls == []
+    assert removed == set(filled)
+    assert H.clear_full_lines(filled) == 2
+    assert filled == {}
+
+
 def test_clear_animation():
     """消行动画：先闪烁、再平滑下落，结束后才换成消行后的棋盘。"""
     pygame.init()
@@ -451,6 +484,8 @@ if __name__ == "__main__":
     test_pause_after_lock()
     test_lock_delay_cannot_be_stalled_by_keys()
     test_spawn_and_lock()
+    test_shared_corner_cell_counts_once()
+    test_clear_chains_after_fall()
     test_clear_animation()
     make_shot("/tmp/hex_shot.png")
     print("ALL LOGIC TESTS PASSED")
