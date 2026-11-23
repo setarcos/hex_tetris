@@ -286,7 +286,7 @@ const SOUND_KEY = 'hexTetris.sound', SCORE_KEY = 'hexTetris.scores';
 const ANIM_KEY = 'hexTetris.anim';
 let acx = null, master = null;
 let soundOn = readFlag(SOUND_KEY, true);
-let clearAnimOn = readFlag(ANIM_KEY, false);
+let clearAnimOn = readFlag(ANIM_KEY, true);
 
 function readFlag(key, dflt) {
   try { const v = localStorage.getItem(key); return v === null ? dflt : v === '1'; }

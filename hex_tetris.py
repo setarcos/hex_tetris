@@ -295,8 +295,8 @@ SOFT_DROP_MS = 55
 # 避免按住下键 / 连按空格时一下连掉两块。
 SPAWN_PAUSE = 150
 # 消行动画：被消的行先高亮闪一下，上方方块再平滑落到底。
-# 游戏里按 C 随时开关；HEX_TETRIS_CLEAR_ANIM=1 可让动画默认打开。
-CLEAR_ANIM_ENABLED = os.environ.get("HEX_TETRIS_CLEAR_ANIM", "0").lower() not in (
+# 默认打开；游戏里按 C 随时开关。HEX_TETRIS_CLEAR_ANIM=0 可让动画默认关闭。
+CLEAR_ANIM_ENABLED = os.environ.get("HEX_TETRIS_CLEAR_ANIM", "1").lower() not in (
     "0", "off", "false", "no")
 CLEAR_FLASH_MS = 150    # 高亮闪烁一次的时长
 CLEAR_FALL_MS = 240     # 平滑下落的时长
