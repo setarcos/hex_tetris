@@ -250,6 +250,8 @@ def play_window(fast=False, seed=None):
                     game.on_key(event.key, event.unicode)
                 elif event.key == pygame.K_m:
                     game.sounds.toggle()
+                elif event.key == pygame.K_c:
+                    game.animate_clears = not game.animate_clears
                 elif event.key == pygame.K_p and not game.game_over:
                     game.paused = not game.paused
 
