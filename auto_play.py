@@ -253,7 +253,9 @@ def play_window(fast=False, seed=None):
                 elif event.key == pygame.K_p and not game.game_over:
                     game.paused = not game.paused
 
-        if not game.game_over and not game.paused and game.clear_anim is None:
+        if game.clear_anim is not None:
+            game.update(dt)        # 推进消行动画（此时 update 不跑重力/锁定）
+        elif not game.game_over and not game.paused:
             wait -= dt
             if wait <= 0:
                 if not plan:
